@@ -13,17 +13,17 @@ describe("SyntheticPatternBackend", () => {
       totalVectors
     });
     const result = await backend.getWindow({
-      offset: totalVectors - 1_000,
-      limit: 1_000,
+      startVectorIndex: totalVectors - 1_000,
+      vectorCount: 1_000,
       expectedRevision: 0
     });
 
     expect(result.totalVectors).toBe(totalVectors);
     expect(result.rows).toHaveLength(1_000);
-    expect(result.rows[0].vectorNo).toBe(
+    expect(result.rows[0].vectorIndex).toBe(
       totalVectors - 1_000
     );
-    expect(result.rows.at(-1)?.vectorNo).toBe(
+    expect(result.rows.at(-1)?.vectorIndex).toBe(
       totalVectors - 1
     );
     expect(result.rows.at(-1)?.rowKey).toBe(
@@ -38,15 +38,15 @@ describe("SyntheticPatternBackend", () => {
 
     await expect(
       backend.getWindow({
-        offset: 0,
-        limit: 1_000,
+        startVectorIndex: 0,
+        vectorCount: 1_000,
         expectedRevision: 1
       })
     ).rejects.toThrow("REVISION_CONFLICT");
     await expect(
       backend.getWindow({
-        offset: 0,
-        limit: 1_001,
+        startVectorIndex: 0,
+        vectorCount: 1_001,
         expectedRevision: 0
       })
     ).rejects.toThrow("Window limit");

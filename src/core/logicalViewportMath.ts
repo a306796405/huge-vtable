@@ -2,7 +2,7 @@
  * 阅读等级：B 接口必读
  * 是否迁移：是
  * 前置阅读：shared/protocol.ts
- * 建议只关注：createScrollGeometry、logicalToVisual、computeWindowStart
+ * 建议只关注：createScrollGeometry、logicalToScrollbarScrollTop、computeWindowStartVectorIndex
  * 可以跳过：基础 clamp 函数
  *
  * 这里全部是无副作用计算。把“亿级逻辑像素”和“浏览器可承受的滚动像素”
@@ -13,136 +13,153 @@ export const MAX_SPACER_HEIGHT_PX = 16_000_000;
 
 export type ScrollGeometry = {
   totalVectors: number;
-  rowHeight: number;
-  bodyHeight: number;
-  outerViewportHeight: number;
-  maxLogicalOffset: number;
-  spacerHeight: number;
-  maxVisualOffset: number;
+  rowHeightPx: number;
+  bodyViewportHeightPx: number;
+  scrollbarViewportHeightPx: number;
+  maxLogicalScrollTopPx: number;
+  spacerHeightPx: number;
+  maxScrollbarScrollTopPx: number;
 };
 
 export type VisibleRange = {
-  start: number;
-  end: number;
+  startVectorIndex: number;
+  endVectorIndex: number;
 };
 
 export function createScrollGeometry(options: {
   totalVectors: number;
-  rowHeight: number;
-  bodyHeight: number;
-  outerViewportHeight: number;
+  rowHeightPx: number;
+  bodyViewportHeightPx: number;
+  scrollbarViewportHeightPx: number;
 }): ScrollGeometry {
   const totalVectors = Math.max(0, Math.trunc(options.totalVectors));
-  const rowHeight = Math.max(1, options.rowHeight);
-  const bodyHeight = Math.max(1, options.bodyHeight);
-  const outerViewportHeight = Math.max(1, options.outerViewportHeight);
-  const maxLogicalOffset = Math.max(
-    0,
-    totalVectors * rowHeight - bodyHeight
+  const rowHeightPx = Math.max(1, options.rowHeightPx);
+  const bodyViewportHeightPx = Math.max(
+    1,
+    options.bodyViewportHeightPx
   );
-  const spacerHeight =
-    maxLogicalOffset === 0
-      ? outerViewportHeight
+  const scrollbarViewportHeightPx = Math.max(
+    1,
+    options.scrollbarViewportHeightPx
+  );
+  const maxLogicalScrollTopPx = Math.max(
+    0,
+    totalVectors * rowHeightPx - bodyViewportHeightPx
+  );
+  const spacerHeightPx =
+    maxLogicalScrollTopPx === 0
+      ? scrollbarViewportHeightPx
       : Math.min(
           MAX_SPACER_HEIGHT_PX,
-          outerViewportHeight + maxLogicalOffset
+          scrollbarViewportHeightPx + maxLogicalScrollTopPx
         );
 
   return {
     totalVectors,
-    rowHeight,
-    bodyHeight,
-    outerViewportHeight,
-    maxLogicalOffset,
-    spacerHeight,
-    maxVisualOffset: Math.max(0, spacerHeight - outerViewportHeight)
+    rowHeightPx,
+    bodyViewportHeightPx,
+    scrollbarViewportHeightPx,
+    maxLogicalScrollTopPx,
+    spacerHeightPx,
+    maxScrollbarScrollTopPx: Math.max(
+      0,
+      spacerHeightPx - scrollbarViewportHeightPx
+    )
   };
 }
 
-export function logicalToVisual(
-  logicalOffset: number,
+export function logicalToScrollbarScrollTop(
+  logicalScrollTopPx: number,
   geometry: ScrollGeometry
 ): number {
   if (
-    geometry.maxLogicalOffset <= 0 ||
-    geometry.maxVisualOffset <= 0
+    geometry.maxLogicalScrollTopPx <= 0 ||
+    geometry.maxScrollbarScrollTopPx <= 0
   ) {
     return 0;
   }
 
-  const safeLogicalOffset = clampNumber(
-    logicalOffset,
+  const safeLogicalScrollTopPx = clampNumber(
+    logicalScrollTopPx,
     0,
-    geometry.maxLogicalOffset
+    geometry.maxLogicalScrollTopPx
   );
 
   return (
-    (safeLogicalOffset / geometry.maxLogicalOffset) *
-    geometry.maxVisualOffset
+    (safeLogicalScrollTopPx / geometry.maxLogicalScrollTopPx) *
+    geometry.maxScrollbarScrollTopPx
   );
 }
 
-export function visualToLogical(
-  visualOffset: number,
+export function scrollbarToLogicalScrollTop(
+  scrollbarScrollTopPx: number,
   geometry: ScrollGeometry
 ): number {
   if (
-    geometry.maxLogicalOffset <= 0 ||
-    geometry.maxVisualOffset <= 0
+    geometry.maxLogicalScrollTopPx <= 0 ||
+    geometry.maxScrollbarScrollTopPx <= 0
   ) {
     return 0;
   }
 
-  const safeVisualOffset = clampNumber(
-    visualOffset,
+  const safeScrollbarScrollTopPx = clampNumber(
+    scrollbarScrollTopPx,
     0,
-    geometry.maxVisualOffset
+    geometry.maxScrollbarScrollTopPx
   );
 
   return (
-    (safeVisualOffset / geometry.maxVisualOffset) *
-    geometry.maxLogicalOffset
+    (safeScrollbarScrollTopPx /
+      geometry.maxScrollbarScrollTopPx) *
+    geometry.maxLogicalScrollTopPx
   );
 }
 
 export function computeVisibleRange(
-  logicalOffset: number,
+  logicalScrollTopPx: number,
   geometry: Pick<
     ScrollGeometry,
-    "totalVectors" | "rowHeight" | "bodyHeight" | "maxLogicalOffset"
+    | "totalVectors"
+    | "rowHeightPx"
+    | "bodyViewportHeightPx"
+    | "maxLogicalScrollTopPx"
   >
 ): VisibleRange {
   if (geometry.totalVectors <= 0) {
-    return { start: 0, end: 0 };
+    return { startVectorIndex: 0, endVectorIndex: 0 };
   }
 
-  const safeOffset = clampNumber(
-    logicalOffset,
+  const safeLogicalScrollTopPx = clampNumber(
+    logicalScrollTopPx,
     0,
-    geometry.maxLogicalOffset
+    geometry.maxLogicalScrollTopPx
   );
-  const start = clampInteger(
-    Math.floor(safeOffset / geometry.rowHeight),
+  const startVectorIndex = clampInteger(
+    Math.floor(
+      safeLogicalScrollTopPx / geometry.rowHeightPx
+    ),
     0,
     geometry.totalVectors - 1
   );
-  const end = clampInteger(
+  const endVectorIndex = clampInteger(
     Math.ceil(
-      (safeOffset + geometry.bodyHeight) / geometry.rowHeight
+      (safeLogicalScrollTopPx +
+        geometry.bodyViewportHeightPx) /
+        geometry.rowHeightPx
     ) - 1,
-    start,
+    startVectorIndex,
     geometry.totalVectors - 1
   );
 
-  return { start, end };
+  return { startVectorIndex, endVectorIndex };
 }
 
 /**
  * 窗口在首可见行之前保留 guardRows，并按 windowShift 对齐。
  * 这让切窗发生在用户到达边缘前，同时保证任意时刻只需要相邻三窗。
  */
-export function computeWindowStart(options: {
-  firstVisibleRow: number;
+export function computeWindowStartVectorIndex(options: {
+  firstVisibleVectorIndex: number;
   totalVectors: number;
   windowSize: number;
   windowShift: number;
@@ -159,7 +176,7 @@ export function computeWindowStart(options: {
   const windowShift = Math.max(1, Math.trunc(options.windowShift));
   const desiredStart = Math.max(
     0,
-    Math.trunc(options.firstVisibleRow) -
+    Math.trunc(options.firstVisibleVectorIndex) -
       Math.max(0, Math.trunc(options.guardRows))
   );
   const alignedStart =
@@ -168,8 +185,8 @@ export function computeWindowStart(options: {
   return clampInteger(alignedStart, 0, maxWindowStart);
 }
 
-export function computeNeighborWindowStarts(options: {
-  currentWindowStart: number;
+export function computeNeighborWindowStartVectorIndexes(options: {
+  currentWindowStartVectorIndex: number;
   totalVectors: number;
   windowSize: number;
   windowShift: number;
@@ -180,7 +197,7 @@ export function computeNeighborWindowStarts(options: {
       Math.max(1, Math.trunc(options.windowSize))
   );
   const current = clampInteger(
-    options.currentWindowStart,
+    options.currentWindowStartVectorIndex,
     0,
     maxWindowStart
   );
@@ -198,27 +215,27 @@ export function computeNeighborWindowStarts(options: {
   return [...starts];
 }
 
-export function clampGoToOffset(
-  offset: number,
+export function clampGoToVectorIndex(
+  vectorIndex: number,
   totalVectors: number
 ): number {
   if (totalVectors <= 0) {
     return 0;
   }
 
-  return clampInteger(offset, 0, totalVectors - 1);
+  return clampInteger(vectorIndex, 0, totalVectors - 1);
 }
 
 export function normalizeWheelDelta(
   event: Pick<WheelEvent, "deltaY" | "deltaMode">,
-  rowHeight: number,
-  bodyHeight: number
+  rowHeightPx: number,
+  bodyViewportHeightPx: number
 ): number {
   switch (event.deltaMode) {
     case 1:
-      return event.deltaY * rowHeight;
+      return event.deltaY * rowHeightPx;
     case 2:
-      return event.deltaY * bodyHeight;
+      return event.deltaY * bodyViewportHeightPx;
     default:
       return event.deltaY;
   }

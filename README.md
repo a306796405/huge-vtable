@@ -15,7 +15,7 @@
 - 不在前端或 React state 中创建全量 rows。
 - VTable 同时最多接收 1,000 行。
 - cache 最多保留前窗、当前窗、后窗，共 3,000 条记录。
-- synthetic backend 根据 `offset` 即时生成窗口，1 亿和 3 亿的内存量相同。
+- synthetic backend 根据 `startVectorIndex` 即时生成窗口，1 亿和 3 亿的内存量相同。
 - 浏览器页面只是调试壳；正式验收环境是 VS Code Custom Editor。
 
 ## 运行
@@ -78,8 +78,8 @@ pnpm build
 ```text
 Go To / wheel / scrollbar
           ↓
-LogicalViewport（逻辑 offset、三窗 cache、旧请求丢弃）
-          ↓ getWindow(offset=..., limit=1000)
+LogicalViewport（逻辑滚动像素、三窗 cache、旧请求丢弃）
+          ↓ getWindow(startVectorIndex=..., vectorCount=1000)
 PatternReadClient
           ↓
 VS Code Provider

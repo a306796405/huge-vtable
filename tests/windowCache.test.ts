@@ -3,7 +3,7 @@ import { ReadWindowCache } from "../src/core/logicalViewport";
 import type { PatternWindowResponse } from "../src/shared/protocol";
 
 describe("ReadWindowCache", () => {
-  it("deduplicates a pending request for the same revision and offset", async () => {
+  it("deduplicates a pending request for the same revision and window start", async () => {
     const cache = new ReadWindowCache(3);
     let loadCount = 0;
     const key = "0:500";
@@ -19,7 +19,9 @@ describe("ReadWindowCache", () => {
     });
 
     expect(first).toBe(second);
-    await expect(first).resolves.toMatchObject({ offset: 500 });
+    await expect(first).resolves.toMatchObject({
+      startVectorIndex: 500
+    });
     expect(loadCount).toBe(1);
   });
 
@@ -67,9 +69,11 @@ describe("ReadWindowCache", () => {
   });
 });
 
-function response(offset: number): PatternWindowResponse {
+function response(
+  startVectorIndex: number
+): PatternWindowResponse {
   return {
-    offset,
+    startVectorIndex,
     totalVectors: 10_000,
     revision: 0,
     rows: []

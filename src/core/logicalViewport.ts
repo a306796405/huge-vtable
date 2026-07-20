@@ -2,7 +2,7 @@
  * 阅读等级：C 稳定核心
  * 是否迁移：是
  * 前置阅读：logicalViewportMath.ts、vtableAdapter.ts
- * 建议只关注：start、goToOffset、refreshLayout、dispose
+ * 建议只关注：start、goToVectorIndex、refreshLayout、dispose
  * 可以跳过：滚动事件抑制、缓存淘汰和 rAF 合并
  *
  * 这个 controller 只做四件事：
@@ -13,26 +13,20 @@
  */
 
 import {
-  SIGNAL_IDS,
   type PatternReadClient,
-  type PatternRenderRow,
   type PatternWindowResponse
 } from "../shared/protocol";
 import type { PatternTableAdapter } from "./vtableAdapter";
 import {
-  VTABLE_END_PADDING_HEIGHT,
-  VTABLE_END_PADDING_ROW_KEY
-} from "./vtableAdapter";
-import {
-  clampGoToOffset,
+  clampGoToVectorIndex,
   clampNumber,
-  computeNeighborWindowStarts,
+  computeNeighborWindowStartVectorIndexes,
   computeVisibleRange,
-  computeWindowStart,
+  computeWindowStartVectorIndex,
   createScrollGeometry,
-  logicalToVisual,
+  logicalToScrollbarScrollTop,
   normalizeWheelDelta,
-  visualToLogical,
+  scrollbarToLogicalScrollTop,
   type ScrollGeometry
 } from "./logicalViewportMath";
 
@@ -47,11 +41,11 @@ export const DEFAULT_VIEWPORT_CONFIG = Object.freeze({
 export type LogicalViewportState = {
   totalVectors: number;
   revision: number;
-  logicalOffset: number;
-  visibleStart: number;
-  visibleEnd: number;
-  windowStart: number;
-  windowEnd: number;
+  logicalScrollTopPx: number;
+  firstVisibleVectorIndex: number;
+  lastVisibleVectorIndex: number;
+  windowStartVectorIndex: number;
+  windowEndVectorIndex: number;
   isLoading: boolean;
   cacheEntries: number;
   errorMessage: string | null;
@@ -185,18 +179,17 @@ export class ReadWindowCache {
 }
 
 export class LogicalViewport {
-  private readonly rowHeight: number;
+  private readonly rowHeightPx: number;
   private readonly windowSize: number;
   private readonly windowShift: number;
   private readonly guardRows: number;
   private readonly cache: ReadWindowCache;
   private geometry: ScrollGeometry;
-  private logicalOffset = 0;
-  private currentWindowStart = -1;
+  private logicalScrollTopPx = 0;
+  private currentWindowStartVectorIndex = -1;
   private currentWindowLength = 0;
-  private currentRenderStart = -1;
-  private currentRenderHeight = 0;
-  private hasEndPadding = false;
+  private currentRenderStartVectorIndex = -1;
+  private currentRenderHeightPx = 0;
   private isLoading = false;
   private errorMessage: string | null = null;
   private disposed = false;
@@ -204,11 +197,11 @@ export class LogicalViewport {
   private syncRafId = 0;
   private stateRafId = 0;
   private resizeRafId = 0;
-  private expectedOuterScrollTop: number | null = null;
+  private expectedScrollbarScrollTopPx: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(private readonly options: LogicalViewportOptions) {
-    this.rowHeight =
+    this.rowHeightPx =
       options.rowHeight ?? DEFAULT_VIEWPORT_CONFIG.rowHeight;
     this.windowSize =
       options.windowSize ?? DEFAULT_VIEWPORT_CONFIG.windowSize;
@@ -229,13 +222,16 @@ export class LogicalViewport {
     await this.syncNow();
   }
 
-  async goToOffset(offset: number): Promise<void> {
-    const target = clampGoToOffset(
-      offset,
+  async goToVectorIndex(vectorIndex: number): Promise<void> {
+    const targetVectorIndex = clampGoToVectorIndex(
+      vectorIndex,
       this.options.totalVectors
     );
 
-    this.setLogicalOffset(target * this.rowHeight, true);
+    this.setLogicalScrollTopPx(
+      targetVectorIndex * this.rowHeightPx,
+      true
+    );
     await this.syncNow();
   }
 
@@ -252,10 +248,10 @@ export class LogicalViewport {
     }
 
     this.geometry = this.measureGeometry();
-    this.logicalOffset = clampNumber(
-      this.logicalOffset,
+    this.logicalScrollTopPx = clampNumber(
+      this.logicalScrollTopPx,
       0,
-      this.geometry.maxLogicalOffset
+      this.geometry.maxLogicalScrollTopPx
     );
     this.updateSpacer();
     this.writeOuterScroll();
@@ -337,20 +333,21 @@ export class LogicalViewport {
      * 相比“忽略一帧”的做法，这个判断不依赖浏览器何时投递事件，
      * 因此在亿级压缩映射和 Vite 热更新下也不会把旧位置写回来。
      */
-    if (this.expectedOuterScrollTop !== null) {
+    if (this.expectedScrollbarScrollTopPx !== null) {
       const matchesProgrammaticWrite =
         Math.abs(
-          actualScrollTop - this.expectedOuterScrollTop
+          actualScrollTop -
+            this.expectedScrollbarScrollTopPx
         ) <= 2;
 
-      this.expectedOuterScrollTop = null;
+      this.expectedScrollbarScrollTopPx = null;
 
       if (matchesProgrammaticWrite) {
         return;
       }
     }
 
-    this.logicalOffset = visualToLogical(
+    this.logicalScrollTopPx = scrollbarToLogicalScrollTop(
       actualScrollTop,
       this.geometry
     );
@@ -367,11 +364,14 @@ export class LogicalViewport {
     if (event.deltaY !== 0) {
       const delta = normalizeWheelDelta(
         event,
-        this.rowHeight,
-        this.geometry.bodyHeight
+        this.rowHeightPx,
+        this.geometry.bodyViewportHeightPx
       );
 
-      this.setLogicalOffset(this.logicalOffset + delta, true);
+      this.setLogicalScrollTopPx(
+        this.logicalScrollTopPx + delta,
+        true
+      );
       handled = true;
     }
 
@@ -389,35 +389,43 @@ export class LogicalViewport {
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
-    let nextOffset: number | null = null;
+    let nextLogicalScrollTopPx: number | null = null;
 
     switch (event.key) {
       case "ArrowDown":
-        nextOffset = this.logicalOffset + this.rowHeight;
+        nextLogicalScrollTopPx =
+          this.logicalScrollTopPx + this.rowHeightPx;
         break;
       case "ArrowUp":
-        nextOffset = this.logicalOffset - this.rowHeight;
+        nextLogicalScrollTopPx =
+          this.logicalScrollTopPx - this.rowHeightPx;
         break;
       case "PageDown":
-        nextOffset =
-          this.logicalOffset + this.geometry.bodyHeight;
+        nextLogicalScrollTopPx =
+          this.logicalScrollTopPx +
+          this.geometry.bodyViewportHeightPx;
         break;
       case "PageUp":
-        nextOffset =
-          this.logicalOffset - this.geometry.bodyHeight;
+        nextLogicalScrollTopPx =
+          this.logicalScrollTopPx -
+          this.geometry.bodyViewportHeightPx;
         break;
       case "Home":
-        nextOffset = 0;
+        nextLogicalScrollTopPx = 0;
         break;
       case "End":
-        nextOffset = this.geometry.maxLogicalOffset;
+        nextLogicalScrollTopPx =
+          this.geometry.maxLogicalScrollTopPx;
         break;
       default:
         return;
     }
 
     event.preventDefault();
-    this.setLogicalOffset(nextOffset, true);
+    this.setLogicalScrollTopPx(
+      nextLogicalScrollTopPx,
+      true
+    );
     this.scheduleSync();
   };
 
@@ -440,11 +448,12 @@ export class LogicalViewport {
     }
 
     const visible = computeVisibleRange(
-      this.logicalOffset,
+      this.logicalScrollTopPx,
       this.geometry
     );
-    const desiredWindowStart = computeWindowStart({
-      firstVisibleRow: visible.start,
+    const desiredWindowStartVectorIndex =
+      computeWindowStartVectorIndex({
+      firstVisibleVectorIndex: visible.startVectorIndex,
       totalVectors: this.options.totalVectors,
       windowSize: this.windowSize,
       windowShift: this.windowShift,
@@ -452,53 +461,64 @@ export class LogicalViewport {
     });
 
     if (
-      desiredWindowStart === this.currentWindowStart &&
+      desiredWindowStartVectorIndex ===
+        this.currentWindowStartVectorIndex &&
       this.currentWindowLength > 0
     ) {
       this.applyLocalScroll();
-      this.prepareAndPrefetch(desiredWindowStart);
+      this.prepareAndPrefetch(
+        desiredWindowStartVectorIndex
+      );
       this.emitState();
       return;
     }
 
-    await this.switchWindow(desiredWindowStart);
+    await this.switchWindow(desiredWindowStartVectorIndex);
   }
 
-  private async switchWindow(windowStart: number): Promise<void> {
+  private async switchWindow(
+    windowStartVectorIndex: number
+  ): Promise<void> {
     const switchId = ++this.activeSwitchId;
 
     this.isLoading = true;
     this.errorMessage = null;
-    this.prepareCache(windowStart);
+    this.prepareCache(windowStartVectorIndex);
     this.emitState();
 
     try {
-      const response = await this.requestWindow(windowStart);
+      const response = await this.requestWindow(
+        windowStartVectorIndex
+      );
 
       if (this.disposed || switchId !== this.activeSwitchId) {
         return;
       }
 
-      this.validateResponse(response, windowStart);
-      const renderWindow = this.createRenderWindow(response);
-      this.options.table.setRecords(renderWindow.rows);
+      this.validateResponse(
+        response,
+        windowStartVectorIndex
+      );
+      this.options.table.setRecords(response.rows);
       await this.options.table.whenLayoutReady();
 
       if (this.disposed || switchId !== this.activeSwitchId) {
         return;
       }
 
-      this.currentWindowStart = response.offset;
+      this.currentWindowStartVectorIndex =
+        response.startVectorIndex;
       this.currentWindowLength = response.rows.length;
-      this.currentRenderStart = renderWindow.offset;
-      this.currentRenderHeight = renderWindow.height;
-      this.hasEndPadding = renderWindow.hasEndPadding;
+      this.currentRenderStartVectorIndex =
+        response.startVectorIndex;
+      this.currentRenderHeightPx =
+        response.rows.length * this.rowHeightPx;
       this.geometry = this.measureGeometry();
       this.updateSpacer();
       this.applyLocalScroll();
       this.isLoading = false;
       this.errorMessage = null;
-      this.prepareAndPrefetch(response.offset);
+      this.prepareAndPrefetch(response.startVectorIndex);
       this.emitState();
     } catch (error) {
       if (this.disposed || switchId !== this.activeSwitchId) {
@@ -513,15 +533,19 @@ export class LogicalViewport {
     }
   }
 
-  private prepareAndPrefetch(windowStart: number): void {
-    const offsets = this.prepareCache(windowStart);
+  private prepareAndPrefetch(
+    windowStartVectorIndex: number
+  ): void {
+    const startVectorIndexes = this.prepareCache(
+      windowStartVectorIndex
+    );
 
-    for (const offset of offsets) {
-      if (offset === windowStart) {
+    for (const startVectorIndex of startVectorIndexes) {
+      if (startVectorIndex === windowStartVectorIndex) {
         continue;
       }
 
-      void this.requestWindow(offset).catch(error => {
+      void this.requestWindow(startVectorIndex).catch(error => {
         if (!this.disposed) {
           this.options.onError?.(error);
         }
@@ -529,41 +553,46 @@ export class LogicalViewport {
     }
   }
 
-  private prepareCache(windowStart: number): number[] {
-    const offsets = computeNeighborWindowStarts({
-      currentWindowStart: windowStart,
+  private prepareCache(
+    windowStartVectorIndex: number
+  ): number[] {
+    const startVectorIndexes =
+      computeNeighborWindowStartVectorIndexes({
+      currentWindowStartVectorIndex: windowStartVectorIndex,
       totalVectors: this.options.totalVectors,
       windowSize: this.windowSize,
       windowShift: this.windowShift
     });
     this.cache.retain(
-      offsets.map(offset => this.cacheKey(offset))
+      startVectorIndexes.map(startVectorIndex =>
+        this.cacheKey(startVectorIndex)
+      )
     );
 
-    return offsets;
+    return startVectorIndexes;
   }
 
   private requestWindow(
-    offset: number
+    startVectorIndex: number
   ): Promise<PatternWindowResponse> {
-    const key = this.cacheKey(offset);
+    const key = this.cacheKey(startVectorIndex);
 
     return this.cache.request(key, () =>
       this.options.client.getWindow({
-        offset,
-        limit: this.windowSize,
+        startVectorIndex,
+        vectorCount: this.windowSize,
         expectedRevision: this.options.revision
       })
     );
   }
 
-  private cacheKey(offset: number): string {
-    return `${this.options.revision}:${offset}`;
+  private cacheKey(startVectorIndex: number): string {
+    return `${this.options.revision}:${startVectorIndex}`;
   }
 
   private validateResponse(
     response: PatternWindowResponse,
-    requestedOffset: number
+    requestedStartVectorIndex: number
   ): void {
     if (response.revision !== this.options.revision) {
       throw new Error(
@@ -577,9 +606,12 @@ export class LogicalViewport {
       );
     }
 
-    if (response.offset !== requestedOffset) {
+    if (
+      response.startVectorIndex !==
+      requestedStartVectorIndex
+    ) {
       throw new Error(
-        `Window offset ${response.offset} does not match requested ${requestedOffset}.`
+        `Window startVectorIndex ${response.startVectorIndex} does not match requested ${requestedStartVectorIndex}.`
       );
     }
 
@@ -590,97 +622,54 @@ export class LogicalViewport {
 
   private applyLocalScroll(): void {
     if (
-      this.currentRenderStart < 0 ||
-      this.currentRenderHeight <= 0
+      this.currentRenderStartVectorIndex < 0 ||
+      this.currentRenderHeightPx <= 0
     ) {
       return;
     }
 
-    const maxLocalOffset = Math.max(
+    const maxLocalScrollTopPx = Math.max(
       0,
-      this.currentRenderHeight - this.geometry.bodyHeight
+      this.currentRenderHeightPx -
+        this.geometry.bodyViewportHeightPx
     );
-    const localOffset = clampNumber(
-      this.logicalOffset -
-        this.currentRenderStart * this.rowHeight,
+    const localScrollTopPx = clampNumber(
+      this.logicalScrollTopPx -
+        this.currentRenderStartVectorIndex *
+          this.rowHeightPx,
       0,
-      maxLocalOffset
+      maxLocalScrollTopPx
     );
     const isAtDatasetEnd =
-      this.logicalOffset >=
-      this.geometry.maxLogicalOffset - 0.5;
+      this.logicalScrollTopPx >=
+      this.geometry.maxLogicalScrollTopPx - 0.5;
     /*
-     * 只有到达整个数据集末尾时，才进入下面那条纯渲染 padding。
-     * VTable 会按自己的真实上限钳位，因此末行完整出现，而中间位置
-     * 仍严格使用逻辑 offset 对应的局部像素。
+     * 到达整个数据集末尾时，直接把一个极大值交给 VTable，由其按照
+     * 当前真实 records/body 高度钳位到内部最大 scrollTop。这样最后一行
+     * 能完整进入 body，又不需要向 records 注入一条伪造的 padding 行。
      */
-    const tableOffset =
-      isAtDatasetEnd && this.hasEndPadding
-      ? localOffset + VTABLE_END_PADDING_HEIGHT
-      : localOffset;
+    const tableScrollTopPx = isAtDatasetEnd
+      ? Number.MAX_SAFE_INTEGER
+      : localScrollTopPx;
 
     if (
       Math.abs(
-        this.options.table.getScrollTop() - tableOffset
+        this.options.table.getScrollTop() -
+          tableScrollTopPx
       ) >= 0.5
     ) {
-      this.options.table.setScrollTop(tableOffset);
+      this.options.table.setScrollTop(tableScrollTopPx);
     }
   }
 
-  private createRenderWindow(
-    response: PatternWindowResponse
-  ): {
-    offset: number;
-    height: number;
-    hasEndPadding: boolean;
-    rows: PatternRenderRow[];
-  } {
-    const reachesDatasetEnd =
-      response.offset + response.rows.length >=
-      this.options.totalVectors;
-    const canDropGuardRow =
-      response.offset > 0 &&
-      response.rows.length === this.windowSize;
-
-    if (!reachesDatasetEnd || !canDropGuardRow) {
-      return {
-        offset: response.offset,
-        height: response.rows.length * this.rowHeight,
-        hasEndPadding: false,
-        rows: response.rows
-      };
-    }
-
-    /*
-     * VTable 1.22.2 在 VS Code webview 的部分缩放比下，最后一条 record
-     * 无法滚过 Canvas 裁剪边界。最终窗口进入时，最前面的 guard row
-     * 已不可能可见，所以用一个纯渲染 padding 替换它：VTable 仍只有
-     * 1000 条 records，后端窗口/cache 仍保持完整的 1000 条权威数据。
-     */
-    const rows = [
-      ...response.rows.slice(1),
-      createEndPaddingRow()
-    ];
-
-    return {
-      offset: response.offset + 1,
-      height:
-        (rows.length - 1) * this.rowHeight +
-        VTABLE_END_PADDING_HEIGHT,
-      hasEndPadding: true,
-      rows
-    };
-  }
-
-  private setLogicalOffset(
-    logicalOffset: number,
+  private setLogicalScrollTopPx(
+    logicalScrollTopPx: number,
     syncOuterScroll: boolean
   ): void {
-    this.logicalOffset = clampNumber(
-      logicalOffset,
+    this.logicalScrollTopPx = clampNumber(
+      logicalScrollTopPx,
       0,
-      this.geometry.maxLogicalOffset
+      this.geometry.maxLogicalScrollTopPx
     );
 
     if (syncOuterScroll) {
@@ -689,36 +678,41 @@ export class LogicalViewport {
   }
 
   private writeOuterScroll(): void {
-    const visualOffset = logicalToVisual(
-      this.logicalOffset,
+    const scrollbarScrollTopPx =
+      logicalToScrollbarScrollTop(
+      this.logicalScrollTopPx,
       this.geometry
     );
 
     if (
       Math.abs(
-        this.options.scrollElement.scrollTop - visualOffset
+        this.options.scrollElement.scrollTop -
+          scrollbarScrollTopPx
       ) < 0.5
     ) {
       return;
     }
 
-    this.expectedOuterScrollTop = visualOffset;
-    this.options.scrollElement.scrollTop = visualOffset;
-    this.expectedOuterScrollTop =
+    this.expectedScrollbarScrollTopPx =
+      scrollbarScrollTopPx;
+    this.options.scrollElement.scrollTop =
+      scrollbarScrollTopPx;
+    this.expectedScrollbarScrollTopPx =
       this.options.scrollElement.scrollTop;
   }
 
   private updateSpacer(): void {
     this.options.spacerElement.style.height =
-      `${this.geometry.spacerHeight}px`;
+      `${this.geometry.spacerHeightPx}px`;
   }
 
   private measureGeometry(): ScrollGeometry {
     return createScrollGeometry({
       totalVectors: this.options.totalVectors,
-      rowHeight: this.rowHeight,
-      bodyHeight: this.options.table.getBodyHeight(),
-      outerViewportHeight:
+      rowHeightPx: this.rowHeightPx,
+      bodyViewportHeightPx:
+        this.options.table.getBodyHeight(),
+      scrollbarViewportHeightPx:
         this.options.scrollElement.clientHeight || 1
     });
   }
@@ -731,20 +725,24 @@ export class LogicalViewport {
     this.stateRafId = requestAnimationFrame(() => {
       this.stateRafId = 0;
       const visible = computeVisibleRange(
-        this.logicalOffset,
+        this.logicalScrollTopPx,
         this.geometry
       );
 
       this.options.onStateChange?.({
         totalVectors: this.options.totalVectors,
         revision: this.options.revision,
-        logicalOffset: this.logicalOffset,
-        visibleStart: visible.start,
-        visibleEnd: visible.end,
-        windowStart: Math.max(0, this.currentWindowStart),
-        windowEnd:
+        logicalScrollTopPx: this.logicalScrollTopPx,
+        firstVisibleVectorIndex:
+          visible.startVectorIndex,
+        lastVisibleVectorIndex: visible.endVectorIndex,
+        windowStartVectorIndex: Math.max(
+          0,
+          this.currentWindowStartVectorIndex
+        ),
+        windowEndVectorIndex:
           this.currentWindowLength > 0
-            ? this.currentWindowStart +
+            ? this.currentWindowStartVectorIndex +
               this.currentWindowLength -
               1
             : 0,
@@ -771,21 +769,4 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "Pattern window request failed.";
-}
-
-function createEndPaddingRow(): PatternRenderRow {
-  return {
-    rowKey: VTABLE_END_PADDING_ROW_KEY,
-    /*
-     * 该 record 永远位于真实末行之后，且只提供滚动空间。undefined
-     * 让 VTable 保持空白，不会伪装成一个真实 Vector。
-     */
-    vectorNo: undefined as unknown as number,
-    cycleText: "",
-    instruction: "",
-    comment: "",
-    signalValues: Object.fromEntries(
-      SIGNAL_IDS.map(signalId => [signalId, ""])
-    ) as PatternRenderRow["signalValues"]
-  };
 }

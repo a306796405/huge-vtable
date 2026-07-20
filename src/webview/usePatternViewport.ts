@@ -33,11 +33,11 @@ import type {
 const INITIAL_STATE: LogicalViewportState = {
   totalVectors: 0,
   revision: 0,
-  logicalOffset: 0,
-  visibleStart: 0,
-  visibleEnd: 0,
-  windowStart: 0,
-  windowEnd: 0,
+  logicalScrollTopPx: 0,
+  firstVisibleVectorIndex: 0,
+  lastVisibleVectorIndex: 0,
+  windowStartVectorIndex: 0,
+  windowEndVectorIndex: 0,
   isLoading: true,
   cacheEntries: 0,
   errorMessage: null
@@ -150,15 +150,18 @@ export function usePatternViewport(client: PatternReadClient) {
     []
   );
 
-  const goToOffset = useCallback(async (offset: number) => {
-    await viewportRef.current?.goToOffset(offset);
-  }, []);
+  const goToVectorIndex = useCallback(
+    async (vectorIndex: number) => {
+      await viewportRef.current?.goToVectorIndex(vectorIndex);
+    },
+    []
+  );
 
   return {
     metadata,
     state,
     ready: metadata !== null && viewportRef.current !== null,
-    goToOffset,
+    goToVectorIndex,
     bindings: {
       logicalScrollRef,
       spacerRef,

@@ -2,7 +2,7 @@
  * 阅读等级：E 开发验证
  * 是否迁移：否
  * 前置阅读：shared/protocol.ts
- * 建议只关注：它按 offset 生成窗口，从不创建 1～3 亿行数组
+ * 建议只关注：它按 startVectorIndex 生成窗口，从不创建 1～3 亿行数组
  * 可以跳过：字段示例值
  */
 
@@ -54,22 +54,22 @@ export class SyntheticPatternBackend implements PatternBackend {
       await new Promise(resolve => setTimeout(resolve, this.delayMs));
     }
 
-    const offset = clampInteger(
-      request.offset,
+    const startVectorIndex = clampInteger(
+      request.startVectorIndex,
       0,
       Math.max(0, this.metadata.totalVectors - 1)
     );
     const count = Math.min(
-      request.limit,
-      this.metadata.totalVectors - offset
+      request.vectorCount,
+      this.metadata.totalVectors - startVectorIndex
     );
     const rows = Array.from({ length: count }, (_, index) =>
-      createSyntheticRow(offset + index)
+      createSyntheticRow(startVectorIndex + index)
     );
 
     return {
       ...this.metadata,
-      offset,
+      startVectorIndex,
       rows
     };
   }
@@ -85,14 +85,19 @@ function validateWindowRequest(
     );
   }
 
-  if (!Number.isInteger(request.offset) || request.offset < 0) {
-    throw new RangeError("Window offset must be a non-negative integer.");
+  if (
+    !Number.isInteger(request.startVectorIndex) ||
+    request.startVectorIndex < 0
+  ) {
+    throw new RangeError(
+      "Window startVectorIndex must be a non-negative integer."
+    );
   }
 
   if (
-    !Number.isInteger(request.limit) ||
-    request.limit < 1 ||
-    request.limit > MAX_WINDOW_LIMIT
+    !Number.isInteger(request.vectorCount) ||
+    request.vectorCount < 1 ||
+    request.vectorCount > MAX_WINDOW_LIMIT
   ) {
     throw new RangeError(
       `Window limit must be an integer between 1 and ${MAX_WINDOW_LIMIT}.`
@@ -100,23 +105,31 @@ function validateWindowRequest(
   }
 }
 
-function createSyntheticRow(vectorNo: number): PatternRenderRow {
+function createSyntheticRow(
+  vectorIndex: number
+): PatternRenderRow {
   const signalValues = {} as Record<SignalId, string>;
 
   for (let index = 0; index < SIGNAL_IDS.length; index += 1) {
     const signalId = SIGNAL_IDS[index];
-    const selector = (vectorNo + index * 7) % 13;
+    const selector = (vectorIndex + index * 7) % 13;
 
     signalValues[signalId] =
       selector === 0 ? "X" : selector < 6 ? "0" : "1";
   }
 
   return {
-    rowKey: `synthetic:${vectorNo}`,
-    vectorNo,
-    cycleText: String(vectorNo),
-    instruction: vectorNo > 0 && vectorNo % 1_000 === 0 ? "repeat 100" : "",
-    comment: vectorNo % 250 === 0 ? `Vector ${vectorNo}` : "",
+    rowKey: `synthetic:${vectorIndex}`,
+    vectorIndex,
+    cycleText: String(vectorIndex),
+    instruction:
+      vectorIndex > 0 && vectorIndex % 1_000 === 0
+        ? "repeat 100"
+        : "",
+    comment:
+      vectorIndex % 250 === 0
+        ? `Vector ${vectorIndex}`
+        : "",
     signalValues
   };
 }

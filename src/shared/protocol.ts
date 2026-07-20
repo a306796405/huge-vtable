@@ -31,7 +31,7 @@ export type PatternRenderRow = {
   /** 当前打开会话内稳定身份；Webview 只能比较和回传，不能解析。 */
   rowKey: string;
   /** 当前 0-based 逻辑 Vector，与第一版 Go To Offset 的输入一致。 */
-  vectorNo: number;
+  vectorIndex: number;
   /** 后端提供的显示文本；前端不负责计算 Cycle。 */
   cycleText: string;
   instruction: string;
@@ -45,13 +45,15 @@ export type PatternMetadata = {
 };
 
 export type PatternWindowRequest = {
-  offset: number;
-  limit: number;
+  /** 请求窗口第一条 Vector 的 0-based 逻辑位置。 */
+  startVectorIndex: number;
+  /** 希望读取的 Vector 数量，不是结束位置。 */
+  vectorCount: number;
   expectedRevision: number;
 };
 
 export type PatternWindowResponse = PatternMetadata & {
-  offset: number;
+  startVectorIndex: number;
   rows: PatternRenderRow[];
 };
 

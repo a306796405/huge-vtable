@@ -101,7 +101,7 @@ function createTableOption(): ListTableConstructorOptions {
 function createColumns(): ColumnsDefine {
   return [
     {
-      field: "vectorNo",
+      field: "vectorIndex",
       title: "Vector",
       width: 92
     },

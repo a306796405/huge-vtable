@@ -41,7 +41,7 @@ export function PatternEditorApp({
           );
 
     setOffsetValue(String(target));
-    await controller.goToOffset(target);
+    await controller.goToVectorIndex(target);
   }, [controller, offsetValue]);
 
   const handleKeyDown = (
@@ -101,18 +101,20 @@ export function PatternEditorApp({
         <span className="status-main">
           Rows {formatNumber(controller.state.totalVectors)}
           {" · "}
-          Offset {formatNumber(controller.state.visibleStart)}
+          Offset {formatNumber(
+            controller.state.firstVisibleVectorIndex
+          )}
         </span>
         <span className="status-detail">
           {controller.state.errorMessage ??
             `visible ${formatNumber(
-              controller.state.visibleStart
+              controller.state.firstVisibleVectorIndex
             )}–${formatNumber(
-              controller.state.visibleEnd
+              controller.state.lastVisibleVectorIndex
             )} · window ${formatNumber(
-              controller.state.windowStart
+              controller.state.windowStartVectorIndex
             )}–${formatNumber(
-              controller.state.windowEnd
+              controller.state.windowEndVectorIndex
             )} · cache ${controller.state.cacheEntries}/3`}
         </span>
         {controller.state.isLoading ? (

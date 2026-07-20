@@ -18,12 +18,9 @@ export type VTableListTableInstance = ListTable;
  * 横向滚动条使用 always 模式，会覆盖 Canvas 底部而不是扩大 DOM 高度。
  * adapter 的 body 测量和表格主题必须共用同一个值，避免末行被覆盖。
  */
-export const VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT = 8;
+export const VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT = 12;
 export const VTABLE_HEADER_ROW_HEIGHT = 32;
 export const PATTERN_HEADER_ROW_COUNT = 2;
-export const VTABLE_END_PADDING_HEIGHT = 32;
-export const VTABLE_END_PADDING_ROW_KEY =
-  "__pattern_vtable_end_padding__";
 
 export interface PatternTableAdapter {
   setRecords(rows: PatternRenderRow[]): void;
@@ -44,19 +41,6 @@ export function createVTableAdapter(
   return {
     setRecords(rows) {
       table.setRecords(rows, { sortState: null });
-
-      if (
-        rows.at(-1)?.rowKey ===
-        VTABLE_END_PADDING_ROW_KEY
-      ) {
-        const tableRow = table.getTableIndexByRecordIndex(
-          rows.length - 1
-        );
-        table.setRowHeight(
-          tableRow,
-          VTABLE_END_PADDING_HEIGHT
-        );
-      }
     },
     setScrollTop(scrollTop) {
       table.setScrollTop(scrollTop);

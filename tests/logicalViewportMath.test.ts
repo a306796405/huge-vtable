@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_SPACER_HEIGHT_PX,
-  clampGoToOffset,
-  computeNeighborWindowStarts,
+  clampGoToVectorIndex,
+  computeNeighborWindowStartVectorIndexes,
   computeVisibleRange,
-  computeWindowStart,
+  computeWindowStartVectorIndex,
   createScrollGeometry,
-  logicalToVisual,
+  logicalToScrollbarScrollTop,
   normalizeWheelDelta,
-  visualToLogical
+  scrollbarToLogicalScrollTop
 } from "../src/core/logicalViewportMath";
 
 describe("logical viewport math", () => {
@@ -19,30 +19,36 @@ describe("logical viewport math", () => {
   ])("maps %,d vectors into one bounded scrollbar", totalVectors => {
     const geometry = createScrollGeometry({
       totalVectors,
-      rowHeight: 28,
-      bodyHeight: 560,
-      outerViewportHeight: 640
+      rowHeightPx: 28,
+      bodyViewportHeightPx: 560,
+      scrollbarViewportHeightPx: 640
     });
 
-    expect(geometry.spacerHeight).toBe(
+    expect(geometry.spacerHeightPx).toBe(
       MAX_SPACER_HEIGHT_PX
     );
-    expect(geometry.maxLogicalOffset).toBe(
+    expect(geometry.maxLogicalScrollTopPx).toBe(
       totalVectors * 28 - 560
     );
 
-    for (const logicalOffset of [
+    for (const logicalScrollTopPx of [
       0,
-      geometry.maxLogicalOffset * 0.25,
-      geometry.maxLogicalOffset * 0.5,
-      geometry.maxLogicalOffset
+      geometry.maxLogicalScrollTopPx * 0.25,
+      geometry.maxLogicalScrollTopPx * 0.5,
+      geometry.maxLogicalScrollTopPx
     ]) {
-      const roundTrip = visualToLogical(
-        logicalToVisual(logicalOffset, geometry),
+      const roundTrip = scrollbarToLogicalScrollTop(
+        logicalToScrollbarScrollTop(
+          logicalScrollTopPx,
+          geometry
+        ),
         geometry
       );
 
-      expect(roundTrip).toBeCloseTo(logicalOffset, 5);
+      expect(roundTrip).toBeCloseTo(
+        logicalScrollTopPx,
+        5
+      );
     }
   });
 
@@ -50,17 +56,21 @@ describe("logical viewport math", () => {
     const totalVectors = 300_000_000;
     const geometry = createScrollGeometry({
       totalVectors,
-      rowHeight: 28,
-      bodyHeight: 560,
-      outerViewportHeight: 640
+      rowHeightPx: 28,
+      bodyViewportHeightPx: 560,
+      scrollbarViewportHeightPx: 640
     });
     const visible = computeVisibleRange(
-      geometry.maxLogicalOffset,
+      geometry.maxLogicalScrollTopPx,
       geometry
     );
 
-    expect(visible.start).toBe(totalVectors - 20);
-    expect(visible.end).toBe(totalVectors - 1);
+    expect(visible.startVectorIndex).toBe(
+      totalVectors - 20
+    );
+    expect(visible.endVectorIndex).toBe(
+      totalVectors - 1
+    );
   });
 
   it("moves wheel input in logical pixels instead of compressed pixels", () => {
@@ -89,8 +99,8 @@ describe("logical viewport math", () => {
 
   it("chooses aligned overlapping windows and trailing neighbors", () => {
     expect(
-      computeWindowStart({
-        firstVisibleRow: 0,
+      computeWindowStartVectorIndex({
+        firstVisibleVectorIndex: 0,
         totalVectors: 100_000_000,
         windowSize: 1_000,
         windowShift: 500,
@@ -98,8 +108,8 @@ describe("logical viewport math", () => {
       })
     ).toBe(0);
     expect(
-      computeWindowStart({
-        firstVisibleRow: 650,
+      computeWindowStartVectorIndex({
+        firstVisibleVectorIndex: 650,
         totalVectors: 100_000_000,
         windowSize: 1_000,
         windowShift: 500,
@@ -107,8 +117,8 @@ describe("logical viewport math", () => {
       })
     ).toBe(500);
     expect(
-      computeWindowStart({
-        firstVisibleRow: 99_999_999,
+      computeWindowStartVectorIndex({
+        firstVisibleVectorIndex: 99_999_999,
         totalVectors: 100_000_000,
         windowSize: 1_000,
         windowShift: 500,
@@ -116,8 +126,8 @@ describe("logical viewport math", () => {
       })
     ).toBe(99_999_000);
     expect(
-      computeNeighborWindowStarts({
-        currentWindowStart: 99_999_000,
+      computeNeighborWindowStartVectorIndexes({
+        currentWindowStartVectorIndex: 99_999_000,
         totalVectors: 100_000_000,
         windowSize: 1_000,
         windowShift: 500
@@ -126,8 +136,8 @@ describe("logical viewport math", () => {
   });
 
   it("clamps Go To Offset to the document", () => {
-    expect(clampGoToOffset(-10, 100)).toBe(0);
-    expect(clampGoToOffset(40, 100)).toBe(40);
-    expect(clampGoToOffset(1000, 100)).toBe(99);
+    expect(clampGoToVectorIndex(-10, 100)).toBe(0);
+    expect(clampGoToVectorIndex(40, 100)).toBe(40);
+    expect(clampGoToVectorIndex(1000, 100)).toBe(99);
   });
 });
