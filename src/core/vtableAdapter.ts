@@ -10,7 +10,11 @@
  */
 
 import type { ListTable } from "@visactor/vtable";
-import type { PatternRenderRow } from "../shared/protocol";
+import {
+  isPatternEditableColumnId,
+  type PatternEditableColumnId,
+  type PatternRenderRow
+} from "../shared/protocol";
 
 export type VTableListTableInstance = ListTable;
 
@@ -33,7 +37,42 @@ export interface PatternTableAdapter {
   getBodyHeight(): number;
   getVisibleRecordRange(): { start: number; end: number } | null;
   getElement(): HTMLElement;
+  observeCellEdits(
+    listener: (event: PatternCellEditEvent) => void
+  ): () => void;
+  observeContextMenu(
+    listener: (event: PatternContextMenuEvent) => void
+  ): () => void;
+  observePaste(
+    listener: (event: PatternPasteEvent) => void
+  ): () => void;
+  getEditableColumnIds(
+    startCol: number,
+    columnCount: number,
+    tableRow: number
+  ): PatternEditableColumnId[] | null;
 }
+
+export type PatternCellEditEvent = {
+  record: PatternRenderRow;
+  columnId: PatternEditableColumnId;
+  rawValue: string;
+  changedValue: string;
+};
+
+export type PatternContextMenuEvent = {
+  clientX: number;
+  clientY: number;
+  targetRow: PatternRenderRow;
+  selectedRows: PatternRenderRow[];
+};
+
+export type PatternPasteEvent = {
+  startCol: number;
+  startTableRow: number;
+  startRow: PatternRenderRow;
+  clipboardText: string;
+};
 
 export function createVTableAdapter(
   table: VTableListTableInstance
@@ -130,12 +169,205 @@ export function createVTableAdapter(
     },
     getElement() {
       return table.getElement();
+    },
+    observeCellEdits(listener) {
+      const listenerId = table.on(
+        "change_cell_value",
+        event => {
+          const record = table.getCellOriginRecord(
+            event.col,
+            event.row
+          ) as PatternRenderRow | undefined;
+          const columnId = getEditableColumnId(
+            table,
+            event.col,
+            event.row
+          );
+
+          if (record && columnId) {
+            listener({
+              record,
+              columnId,
+              rawValue: toCellString(event.rawValue),
+              changedValue: toCellString(event.changedValue)
+            });
+          }
+        }
+      );
+
+      return () => table.off(listenerId);
+    },
+    observeContextMenu(listener) {
+      const listenerId = table.on(
+        "contextmenu_cell",
+        event => {
+          event.event?.preventDefault();
+          const targetRow = table.getCellOriginRecord(
+            event.col,
+            event.row
+          ) as PatternRenderRow | undefined;
+
+          if (!targetRow) {
+            return;
+          }
+
+          const ranges = table.getSelectedCellRanges();
+          const targetInsideSelection = ranges.some(range =>
+            cellInsideRange(event.col, event.row, range)
+          );
+          const selectedRows = targetInsideSelection
+            ? collectSelectedRows(table, ranges, event.col)
+            : [targetRow];
+          const mouseEvent = event.event as
+            | MouseEvent
+            | PointerEvent
+            | undefined;
+
+          listener({
+            clientX: mouseEvent?.clientX ?? 0,
+            clientY: mouseEvent?.clientY ?? 0,
+            targetRow,
+            selectedRows
+          });
+        }
+      );
+
+      return () => table.off(listenerId);
+    },
+    observePaste(listener) {
+      const element = table.getElement();
+      const handlePaste = (event: ClipboardEvent) => {
+        const range = table.getSelectedCellRanges().at(-1);
+
+        if (!range || !event.clipboardData) {
+          return;
+        }
+
+        const startCol = Math.min(
+          range.start.col,
+          range.end.col
+        );
+        const startTableRow = Math.min(
+          range.start.row,
+          range.end.row
+        );
+        const startRow = table.getCellOriginRecord(
+          startCol,
+          startTableRow
+        ) as PatternRenderRow | undefined;
+
+        if (!startRow) {
+          return;
+        }
+
+        event.preventDefault();
+        listener({
+          startCol,
+          startTableRow,
+          startRow,
+          clipboardText:
+            event.clipboardData.getData("text/plain")
+        });
+      };
+
+      element.addEventListener("paste", handlePaste);
+      return () =>
+        element.removeEventListener("paste", handlePaste);
+    },
+    getEditableColumnIds(startCol, columnCount, tableRow) {
+      const columns: PatternEditableColumnId[] = [];
+
+      for (let index = 0; index < columnCount; index += 1) {
+        const columnId = getEditableColumnId(
+          table,
+          startCol + index,
+          tableRow
+        );
+
+        if (!columnId) {
+          return null;
+        }
+
+        columns.push(columnId);
+      }
+
+      return columns;
     }
   };
+}
+
+function getEditableColumnId(
+  table: VTableListTableInstance,
+  col: number,
+  row: number
+): PatternEditableColumnId | null {
+  const field = table.getHeaderField(col, row);
+  const candidate = Array.isArray(field)
+    ? field.at(-1)
+    : field;
+
+  return isPatternEditableColumnId(candidate)
+    ? candidate
+    : null;
+}
+
+function cellInsideRange(
+  col: number,
+  row: number,
+  range: {
+    start: { col: number; row: number };
+    end: { col: number; row: number };
+  }
+): boolean {
+  return (
+    col >= Math.min(range.start.col, range.end.col) &&
+    col <= Math.max(range.start.col, range.end.col) &&
+    row >= Math.min(range.start.row, range.end.row) &&
+    row <= Math.max(range.start.row, range.end.row)
+  );
+}
+
+function collectSelectedRows(
+  table: VTableListTableInstance,
+  ranges: ReturnType<VTableListTableInstance["getSelectedCellRanges"]>,
+  fallbackCol: number
+): PatternRenderRow[] {
+  const rows = new Map<string, PatternRenderRow>();
+
+  for (const range of ranges) {
+    const startRow = Math.min(range.start.row, range.end.row);
+    const endRow = Math.max(range.start.row, range.end.row);
+    const col = Math.max(
+      0,
+      Math.min(
+        fallbackCol,
+        Math.max(range.start.col, range.end.col)
+      )
+    );
+
+    for (let row = startRow; row <= endRow; row += 1) {
+      const record = table.getCellOriginRecord(
+        col,
+        row
+      ) as PatternRenderRow | undefined;
+
+      if (record) {
+        rows.set(record.rowKey, record);
+      }
+    }
+  }
+
+  return [...rows.values()];
 }
 
 function nextFrame(): Promise<void> {
   return new Promise(resolve =>
     requestAnimationFrame(() => resolve())
   );
+}
+
+function toCellString(value: unknown): string {
+  return value === null || value === undefined
+    ? ""
+    : String(value);
 }

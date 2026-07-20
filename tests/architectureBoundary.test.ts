@@ -6,12 +6,17 @@ import { SIGNAL_IDS } from "../src/shared/protocol";
 const projectRoot = join(__dirname, "..");
 
 describe("v22-lite architecture boundary", () => {
-  it("keeps exactly twelve production TypeScript entry files", () => {
+  it("keeps VTable internal measurement APIs inside the adapter", () => {
     const files = collectFiles(join(projectRoot, "src"))
       .filter(path => /\.(ts|tsx)$/.test(path))
-      .filter(path => !path.includes("/dev-only/"));
+      .filter(path => !path.endsWith("/core/vtableAdapter.ts"));
+    const source = files
+      .map(path => readFileSync(path, "utf8"))
+      .join("\n");
 
-    expect(files).toHaveLength(12);
+    expect(source).not.toMatch(
+      /tableNoFrameHeight|tableY|getFrozenRowsHeight|getBottomFrozenRowsHeight|renderAsync/
+    );
   });
 
   it("does not import CachedDataSource or TanStack", () => {

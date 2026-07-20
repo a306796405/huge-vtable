@@ -13,7 +13,9 @@ import * as vscode from "vscode";
 import { SyntheticPatternBackend } from "../dev-only/syntheticPatternBackend";
 import type {
   ExtensionResponseMessage,
-  ReadRequestError,
+  PatternMutationRequest,
+  PatternRequestError,
+  PatternWindowRequest,
   WebviewRequestMessage
 } from "../shared/protocol";
 import type { PatternBackend } from "./patternBackend";
@@ -110,13 +112,29 @@ export class PatternEditorProvider
             id: message.id,
             ok: true,
             payload: await document.backend.getWindow(
-              message.payload
+              message.payload as PatternWindowRequest
+            )
+          });
+          return;
+        case "applyMutation":
+          if (!message.payload) {
+            throw new RangeError(
+              "applyMutation payload is required."
+            );
+          }
+
+          await respond(webview, {
+            kind: "response",
+            id: message.id,
+            ok: true,
+            payload: await document.backend.applyMutation(
+              message.payload as PatternMutationRequest
             )
           });
           return;
       }
     } catch (error) {
-      const responseError = toReadRequestError(
+      const responseError = toPatternRequestError(
         error,
         (await document.backend.getMetadata()).revision
       );
@@ -152,14 +170,14 @@ async function readSyntheticTotalVectors(
   }
 }
 
-function toReadRequestError(
+function toPatternRequestError(
   error: unknown,
   currentRevision: number
-): ReadRequestError {
+): PatternRequestError {
   const message =
     error instanceof Error
       ? error.message
-      : "Pattern read request failed.";
+      : "Pattern request failed.";
 
   if (message.startsWith("REVISION_CONFLICT:")) {
     return {

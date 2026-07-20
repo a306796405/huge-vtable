@@ -2,18 +2,21 @@
  * 阅读等级：A 业务必读
  * 是否迁移：按真实插件桥接方式复用
  * 前置阅读：shared/protocol.ts
- * 建议只关注：getMetadata/getWindow 与请求 id 配对
+ * 建议只关注：三条 DocumentClient 方法与请求 id 配对
  * 可以跳过：dispose 时拒绝 pending 的样板
  */
 
 import type {
   ExtensionResponseMessage,
+  PatternCommand,
+  PatternDocumentClient,
   PatternMetadata,
-  PatternReadClient,
-  PatternReadCommand,
+  PatternMutationRequest,
+  PatternMutationResponse,
+  PatternRequestError,
+  PatternRequestPayloadMap,
   PatternWindowRequest,
   PatternWindowResponse,
-  ReadRequestError,
   WebviewRequestMessage
 } from "../shared/protocol";
 
@@ -22,22 +25,22 @@ declare function acquireVsCodeApi(): {
 };
 
 type PendingRequest = {
-  command: PatternReadCommand;
+  command: PatternCommand;
   resolve(value: unknown): void;
   reject(error: Error): void;
 };
 
-export class PatternReadRequestError extends Error {
+export class PatternRequestFailedError extends Error {
   constructor(
-    readonly detail: ReadRequestError,
-    readonly command: PatternReadCommand
+    readonly detail: PatternRequestError,
+    readonly command: PatternCommand
   ) {
     super(detail.message);
-    this.name = "PatternReadRequestError";
+    this.name = "PatternRequestFailedError";
   }
 }
 
-export function createVsCodePatternReadClient(): PatternReadClient {
+export function createVsCodePatternClient(): PatternDocumentClient {
   const vscode = acquireVsCodeApi();
   const pending = new Map<number, PendingRequest>();
   let nextId = 1;
@@ -65,15 +68,15 @@ export function createVsCodePatternReadClient(): PatternReadClient {
     }
 
     request.reject(
-      new PatternReadRequestError(message.error, request.command)
+      new PatternRequestFailedError(message.error, request.command)
     );
   };
 
   window.addEventListener("message", handleMessage);
 
   function request<T>(
-    command: PatternReadCommand,
-    payload?: PatternWindowRequest
+    command: PatternCommand,
+    payload?: PatternRequestPayloadMap[PatternCommand]
   ): Promise<T> {
     if (disposed) {
       return Promise.reject(
@@ -107,6 +110,12 @@ export function createVsCodePatternReadClient(): PatternReadClient {
       return request<PatternWindowResponse>(
         "getWindow",
         windowRequest
+      );
+    },
+    applyMutation(mutationRequest: PatternMutationRequest) {
+      return request<PatternMutationResponse>(
+        "applyMutation",
+        mutationRequest
       );
     },
     dispose() {

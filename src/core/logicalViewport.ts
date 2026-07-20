@@ -13,7 +13,9 @@
  */
 
 import {
-  type PatternReadClient,
+  type PatternDocumentClient,
+  type PatternMutationEffect,
+  type PatternRenderRow,
   type PatternWindowResponse
 } from "../shared/protocol";
 import type { PatternTableAdapter } from "./vtableAdapter";
@@ -52,7 +54,7 @@ export type LogicalViewportState = {
 };
 
 export type LogicalViewportOptions = {
-  client: PatternReadClient;
+  client: PatternDocumentClient;
   table: PatternTableAdapter;
   scrollElement: HTMLDivElement;
   spacerElement: HTMLDivElement;
@@ -66,6 +68,12 @@ export type LogicalViewportOptions = {
   cacheWindowLimit?: number;
   onStateChange?(state: LogicalViewportState): void;
   onError?(error: unknown): void;
+};
+
+export type ViewportSnapshot = {
+  firstVisibleVectorIndex: number;
+  intraRowOffsetPx: number;
+  horizontalScrollLeftPx: number;
 };
 
 type CacheEntry = {
@@ -142,6 +150,74 @@ export class ReadWindowCache {
     return this.entries.has(key);
   }
 
+  seed(key: string, response: PatternWindowResponse): void {
+    const entry: CacheEntry = {
+      touchedAt: ++this.clock,
+      response,
+      promise: Promise.resolve(response)
+    };
+
+    this.entries.set(key, entry);
+    this.enforceLimit();
+  }
+
+  getResolved(key: string): PatternWindowResponse | undefined {
+    const entry = this.entries.get(key);
+    return entry?.response;
+  }
+
+  patchRows(
+    revision: number,
+    rows: readonly PatternRenderRow[],
+    nextRevision = revision
+  ): void {
+    const replacements = new Map(
+      rows.map(row => [row.rowKey, row])
+    );
+    const migrated: Array<
+      [string, string, CacheEntry]
+    > = [];
+
+    for (const [key, entry] of this.entries) {
+      const response = entry.response;
+
+      if (!response || response.revision !== revision) {
+        continue;
+      }
+
+      const nextResponse: PatternWindowResponse = {
+        ...response,
+        revision: nextRevision,
+        isDirty:
+          nextRevision === revision
+            ? response.isDirty
+            : true,
+        rows: response.rows.map(
+          row => replacements.get(row.rowKey) ?? row
+        )
+      };
+      const nextKey = `${nextRevision}:${response.startVectorIndex}`;
+      const nextEntry: CacheEntry = {
+        touchedAt: ++this.clock,
+        response: nextResponse,
+        promise: Promise.resolve(nextResponse)
+      };
+
+      migrated.push([key, nextKey, nextEntry]);
+    }
+
+    for (const [oldKey, nextKey, entry] of migrated) {
+      this.entries.delete(oldKey);
+      this.entries.set(nextKey, entry);
+
+      if (this.retainedKeys.delete(oldKey)) {
+        this.retainedKeys.add(nextKey);
+      }
+    }
+
+    this.enforceLimit();
+  }
+
   clear(): void {
     this.entries.clear();
     this.retainedKeys.clear();
@@ -184,6 +260,8 @@ export class LogicalViewport {
   private readonly windowShift: number;
   private readonly guardRows: number;
   private readonly cache: ReadWindowCache;
+  private totalVectors: number;
+  private revision: number;
   private geometry: ScrollGeometry;
   private logicalScrollTopPx = 0;
   private currentWindowStartVectorIndex = -1;
@@ -213,6 +291,8 @@ export class LogicalViewport {
       options.cacheWindowLimit ??
         DEFAULT_VIEWPORT_CONFIG.cacheWindowLimit
     );
+    this.totalVectors = options.totalVectors;
+    this.revision = options.revision;
     this.geometry = this.measureGeometry();
   }
 
@@ -225,7 +305,7 @@ export class LogicalViewport {
   async goToVectorIndex(vectorIndex: number): Promise<void> {
     const targetVectorIndex = clampGoToVectorIndex(
       vectorIndex,
-      this.options.totalVectors
+      this.totalVectors
     );
 
     this.setLogicalScrollTopPx(
@@ -256,6 +336,205 @@ export class LogicalViewport {
     this.updateSpacer();
     this.writeOuterScroll();
     await this.syncNow();
+  }
+
+  captureViewportSnapshot(): ViewportSnapshot {
+    const firstVisibleVectorIndex =
+      this.totalVectors > 0
+        ? Math.floor(
+            this.logicalScrollTopPx / this.rowHeightPx
+          )
+        : 0;
+
+    return {
+      firstVisibleVectorIndex,
+      intraRowOffsetPx:
+        this.logicalScrollTopPx -
+        firstVisibleVectorIndex * this.rowHeightPx,
+      horizontalScrollLeftPx:
+        this.options.table.getScrollLeft()
+    };
+  }
+
+  async applyCommittedRows(options: {
+    previousRevision: number;
+    revision: number;
+    rows: PatternRenderRow[];
+  }): Promise<void> {
+    if (
+      options.previousRevision !== this.revision ||
+      options.revision !== options.previousRevision + 1
+    ) {
+      throw new Error(
+        "Committed row revision does not advance the current viewport by one."
+      );
+    }
+
+    const previousKey = `${this.revision}:${this.currentWindowStartVectorIndex}`;
+    this.cache.patchRows(
+      options.previousRevision,
+      options.rows,
+      options.revision
+    );
+    this.revision = options.revision;
+    const current = this.cache.getResolved(
+      `${this.revision}:${this.currentWindowStartVectorIndex}`
+    );
+
+    if (!current) {
+      throw new Error(
+        `Current window ${previousKey} is not available for a local update.`
+      );
+    }
+
+    this.options.table.setRecords(current.rows);
+    await this.options.table.whenLayoutReady();
+    this.applyLocalScroll();
+    this.emitState();
+  }
+
+  restoreOptimisticRow(row: PatternRenderRow): void {
+    this.cache.patchRows(this.revision, [row], this.revision);
+    const current = this.cache.getResolved(
+      `${this.revision}:${this.currentWindowStartVectorIndex}`
+    );
+
+    if (current) {
+      this.options.table.setRecords(current.rows);
+      this.applyLocalScroll();
+    }
+  }
+
+  async replaceDataset(options: {
+    totalVectors: number;
+    revision: number;
+    effects?: PatternMutationEffect[];
+    snapshot?: ViewportSnapshot;
+  }): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
+    const switchId = ++this.activeSwitchId;
+    const snapshot =
+      options.snapshot ?? this.captureViewportSnapshot();
+    const targetVectorIndex = mapVectorIndexAfterEffects(
+      snapshot.firstVisibleVectorIndex,
+      options.effects ?? []
+    );
+    const safeTargetVectorIndex =
+      options.totalVectors > 0
+        ? clampGoToVectorIndex(
+            targetVectorIndex,
+            options.totalVectors
+          )
+        : 0;
+    const nextLogicalScrollTopPx =
+      safeTargetVectorIndex * this.rowHeightPx +
+      snapshot.intraRowOffsetPx;
+
+    this.isLoading = true;
+    this.errorMessage = null;
+    this.emitState();
+
+    try {
+      if (options.totalVectors === 0) {
+        this.cache.clear();
+        this.totalVectors = 0;
+        this.revision = options.revision;
+        this.currentWindowStartVectorIndex = -1;
+        this.currentWindowLength = 0;
+        this.currentRenderStartVectorIndex = -1;
+        this.currentRenderHeightPx = 0;
+        this.logicalScrollTopPx = 0;
+        this.options.table.setRecords([]);
+        await this.options.table.whenLayoutReady();
+        this.geometry = this.measureGeometry();
+        this.updateSpacer();
+        this.writeOuterScroll();
+        this.options.table.setScrollLeft(
+          snapshot.horizontalScrollLeftPx
+        );
+        this.isLoading = false;
+        this.emitState();
+        return;
+      }
+
+      const targetWindowStartVectorIndex =
+        computeWindowStartVectorIndex({
+        firstVisibleVectorIndex: safeTargetVectorIndex,
+        totalVectors: options.totalVectors,
+        windowSize: this.windowSize,
+        windowShift: this.windowShift,
+        guardRows: this.guardRows
+      });
+      const response = await this.options.client.getWindow({
+        startVectorIndex: targetWindowStartVectorIndex,
+        vectorCount: this.windowSize,
+        expectedRevision: options.revision
+      });
+
+      if (this.disposed || switchId !== this.activeSwitchId) {
+        return;
+      }
+
+      if (
+        response.revision !== options.revision ||
+        response.totalVectors !== options.totalVectors ||
+        response.startVectorIndex !==
+          targetWindowStartVectorIndex
+      ) {
+        throw new Error(
+          "Replacement window does not match the committed dataset."
+        );
+      }
+
+      this.cache.clear();
+      this.totalVectors = options.totalVectors;
+      this.revision = options.revision;
+      this.cache.seed(
+        `${this.revision}:${response.startVectorIndex}`,
+        response
+      );
+      this.options.table.setRecords(response.rows);
+      await this.options.table.whenLayoutReady();
+
+      if (this.disposed || switchId !== this.activeSwitchId) {
+        return;
+      }
+
+      this.currentWindowStartVectorIndex =
+        response.startVectorIndex;
+      this.currentWindowLength = response.rows.length;
+      this.currentRenderStartVectorIndex =
+        response.startVectorIndex;
+      this.currentRenderHeightPx =
+        response.rows.length * this.rowHeightPx;
+      this.geometry = this.measureGeometry();
+      this.logicalScrollTopPx = clampNumber(
+        nextLogicalScrollTopPx,
+        0,
+        this.geometry.maxLogicalScrollTopPx
+      );
+      this.updateSpacer();
+      this.writeOuterScroll();
+      this.applyLocalScroll();
+      this.options.table.setScrollLeft(
+        snapshot.horizontalScrollLeftPx
+      );
+      this.isLoading = false;
+      this.prepareAndPrefetch(response.startVectorIndex);
+      this.emitState();
+    } catch (error) {
+      if (!this.disposed && switchId === this.activeSwitchId) {
+        this.isLoading = false;
+        this.errorMessage = errorMessage(error);
+        this.emitState();
+        this.options.onError?.(error);
+      }
+
+      throw error;
+    }
   }
 
   dispose(): void {
@@ -389,6 +668,14 @@ export class LogicalViewport {
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    /*
+     * 双击编辑时 InputEditor 会把 input 放进 VTable 容器。编辑器内的
+     * 方向键、Home/End 属于文本输入，不能再被逻辑 viewport 当作滚动命令。
+     */
+    if (isTextEditingTarget(event.target)) {
+      return;
+    }
+
     let nextLogicalScrollTopPx: number | null = null;
 
     switch (event.key) {
@@ -443,7 +730,7 @@ export class LogicalViewport {
   }
 
   private async syncNow(): Promise<void> {
-    if (this.disposed || this.options.totalVectors <= 0) {
+    if (this.disposed || this.totalVectors <= 0) {
       return;
     }
 
@@ -454,7 +741,7 @@ export class LogicalViewport {
     const desiredWindowStartVectorIndex =
       computeWindowStartVectorIndex({
       firstVisibleVectorIndex: visible.startVectorIndex,
-      totalVectors: this.options.totalVectors,
+      totalVectors: this.totalVectors,
       windowSize: this.windowSize,
       windowShift: this.windowShift,
       guardRows: this.guardRows
@@ -559,7 +846,7 @@ export class LogicalViewport {
     const startVectorIndexes =
       computeNeighborWindowStartVectorIndexes({
       currentWindowStartVectorIndex: windowStartVectorIndex,
-      totalVectors: this.options.totalVectors,
+      totalVectors: this.totalVectors,
       windowSize: this.windowSize,
       windowShift: this.windowShift
     });
@@ -581,26 +868,26 @@ export class LogicalViewport {
       this.options.client.getWindow({
         startVectorIndex,
         vectorCount: this.windowSize,
-        expectedRevision: this.options.revision
+        expectedRevision: this.revision
       })
     );
   }
 
   private cacheKey(startVectorIndex: number): string {
-    return `${this.options.revision}:${startVectorIndex}`;
+    return `${this.revision}:${startVectorIndex}`;
   }
 
   private validateResponse(
     response: PatternWindowResponse,
     requestedStartVectorIndex: number
   ): void {
-    if (response.revision !== this.options.revision) {
+    if (response.revision !== this.revision) {
       throw new Error(
-        `Window revision ${response.revision} does not match ${this.options.revision}.`
+        `Window revision ${response.revision} does not match ${this.revision}.`
       );
     }
 
-    if (response.totalVectors !== this.options.totalVectors) {
+    if (response.totalVectors !== this.totalVectors) {
       throw new Error(
         "Window totalVectors changed during the read-only session."
       );
@@ -708,7 +995,7 @@ export class LogicalViewport {
 
   private measureGeometry(): ScrollGeometry {
     return createScrollGeometry({
-      totalVectors: this.options.totalVectors,
+      totalVectors: this.totalVectors,
       rowHeightPx: this.rowHeightPx,
       bodyViewportHeightPx:
         this.options.table.getBodyHeight(),
@@ -730,8 +1017,8 @@ export class LogicalViewport {
       );
 
       this.options.onStateChange?.({
-        totalVectors: this.options.totalVectors,
-        revision: this.options.revision,
+        totalVectors: this.totalVectors,
+        revision: this.revision,
         logicalScrollTopPx: this.logicalScrollTopPx,
         firstVisibleVectorIndex:
           visible.startVectorIndex,
@@ -769,4 +1056,53 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "Pattern window request failed.";
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
+}
+
+function mapVectorIndexAfterEffects(
+  originalVectorIndex: number,
+  effects: readonly PatternMutationEffect[]
+): number {
+  let mappedVectorIndex = originalVectorIndex;
+  let accumulatedShift = 0;
+
+  for (const effect of effects) {
+    if (effect.kind === "cellsUpdated") {
+      continue;
+    }
+
+    const currentStartVectorIndex =
+      effect.startVectorIndex + accumulatedShift;
+
+    if (effect.kind === "rowsInserted") {
+      if (currentStartVectorIndex <= mappedVectorIndex) {
+        mappedVectorIndex += effect.count;
+      }
+
+      accumulatedShift += effect.count;
+      continue;
+    }
+
+    const currentEndVectorIndex =
+      currentStartVectorIndex + effect.count;
+
+    if (mappedVectorIndex >= currentEndVectorIndex) {
+      mappedVectorIndex -= effect.count;
+    } else if (
+      mappedVectorIndex >= currentStartVectorIndex
+    ) {
+      mappedVectorIndex = currentStartVectorIndex;
+    }
+
+    accumulatedShift -= effect.count;
+  }
+
+  return Math.max(0, mappedVectorIndex);
 }

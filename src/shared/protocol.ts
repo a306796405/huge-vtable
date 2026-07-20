@@ -2,12 +2,12 @@
  * 阅读等级：A 业务必读
  * 是否迁移：按真实 Pattern 字段调整
  * 前置阅读：README.md
- * 建议只关注：PatternRenderRow、PatternReadClient 和两条只读请求
+ * 建议只关注：PatternRenderRow、PatternDocumentClient 和 applyMutation
  * 可以跳过：Webview 请求配对消息
  *
- * 第一版协议刻意只描述“元数据 + 小窗口读取”。rowKey、revision 和 signalId
- * 现在就保留，是为了以后增加编辑时不推翻行身份和请求一致性；这里没有提前
- * 定义 mutation、history、Cycle 重算或 Annotation。
+ * 窗口读取与写事务共用 rowKey/revision：前端只回传稳定身份，所有新增、
+ * 删除、更新和 Paste 都由后端在一个 applyMutation 边界内提交。本版仍不
+ * 提前定义 history、Cycle 重算或 Annotation。
  */
 
 export const SIGNAL_IDS = [
@@ -42,6 +42,7 @@ export type PatternRenderRow = {
 export type PatternMetadata = {
   totalVectors: number;
   revision: number;
+  isDirty: boolean;
 };
 
 export type PatternWindowRequest = {
@@ -57,22 +58,114 @@ export type PatternWindowResponse = PatternMetadata & {
   rows: PatternRenderRow[];
 };
 
-export interface PatternReadClient {
+export type PatternEditableColumnId =
+  | "instruction"
+  | "comment"
+  | SignalId;
+
+export function isPatternEditableColumnId(
+  value: unknown
+): value is PatternEditableColumnId {
+  return (
+    value === "instruction" ||
+    value === "comment" ||
+    (typeof value === "string" &&
+      (SIGNAL_IDS as readonly string[]).includes(value))
+  );
+}
+
+export type PatternCellChange = {
+  rowKey: string;
+  columnId: PatternEditableColumnId;
+  value: string;
+};
+
+export type PatternMutationOperation =
+  | {
+      kind: "insertRows";
+      atVectorIndex: number;
+      count: number;
+    }
+  | {
+      kind: "deleteRows";
+      rowKeys: string[];
+    }
+  | {
+      kind: "updateCells";
+      changes: PatternCellChange[];
+    }
+  | {
+      kind: "paste";
+      startRowKey: string;
+      columns: PatternEditableColumnId[];
+      values: string[][];
+    };
+
+export type PatternMutationRequest = {
+  baseRevision: number;
+  operation: PatternMutationOperation;
+};
+
+export type PatternMutationEffect =
+  | {
+      kind: "rowsInserted";
+      startVectorIndex: number;
+      count: number;
+    }
+  | {
+      kind: "rowsDeleted";
+      startVectorIndex: number;
+      count: number;
+    }
+  | {
+      kind: "cellsUpdated";
+      startVectorIndex: number;
+      endVectorIndex: number;
+      changedCellCount: number;
+    };
+
+export type PatternMutationResponse = PatternMetadata & {
+  operationKind: PatternMutationOperation["kind"];
+  previousRevision: number;
+  effects: PatternMutationEffect[];
+  updatedRows?: PatternRenderRow[];
+  message: string;
+};
+
+export interface PatternDocumentClient {
   getMetadata(): Promise<PatternMetadata>;
   getWindow(request: PatternWindowRequest): Promise<PatternWindowResponse>;
+  applyMutation(
+    request: PatternMutationRequest
+  ): Promise<PatternMutationResponse>;
   dispose?(): void;
 }
 
-export type PatternReadCommand = "getMetadata" | "getWindow";
+export type PatternCommand =
+  | "getMetadata"
+  | "getWindow"
+  | "applyMutation";
+
+export type PatternRequestPayloadMap = {
+  getMetadata: undefined;
+  getWindow: PatternWindowRequest;
+  applyMutation: PatternMutationRequest;
+};
+
+export type PatternResponsePayloadMap = {
+  getMetadata: PatternMetadata;
+  getWindow: PatternWindowResponse;
+  applyMutation: PatternMutationResponse;
+};
 
 export type WebviewRequestMessage = {
   kind: "request";
   id: number;
-  command: PatternReadCommand;
-  payload?: PatternWindowRequest;
+  command: PatternCommand;
+  payload?: PatternRequestPayloadMap[PatternCommand];
 };
 
-export type ReadRequestError = {
+export type PatternRequestError = {
   code: "REVISION_CONFLICT" | "VALIDATION_ERROR" | "INTERNAL_ERROR";
   message: string;
   currentRevision?: number;
@@ -83,11 +176,11 @@ export type ExtensionResponseMessage =
       kind: "response";
       id: number;
       ok: true;
-      payload: PatternMetadata | PatternWindowResponse;
+      payload: PatternResponsePayloadMap[PatternCommand];
     }
   | {
       kind: "response";
       id: number;
       ok: false;
-      error: ReadRequestError;
+      error: PatternRequestError;
     };

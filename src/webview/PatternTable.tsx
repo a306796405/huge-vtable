@@ -8,6 +8,7 @@
 
 import { memo, useMemo } from "react";
 import { ListTable } from "@visactor/react-vtable";
+import { InputEditor } from "@visactor/vtable-editors";
 import type {
   ColumnsDefine,
   ListTableConstructorOptions
@@ -44,6 +45,7 @@ export function PatternTable({
         className="table-overlay"
         tabIndex={0}
         aria-label="Pattern vector table"
+        onContextMenu={bindings.handleSurfaceContextMenu}
       >
         <MemoVTable
           option={option}
@@ -64,6 +66,7 @@ function createTableOption(): ListTableConstructorOptions {
     frozenColCount: 4,
     autoFillWidth: false,
     overscrollBehavior: "none",
+    editCellTrigger: "doubleclick",
     keyboardOptions: {
       copySelected: true,
       pasteValueToCell: false,
@@ -113,12 +116,14 @@ function createColumns(): ColumnsDefine {
     {
       field: "instruction",
       title: "Instruction",
-      width: 160
+      width: 160,
+      editor: new InputEditor()
     },
     {
       field: "comment",
       title: "Comment",
-      width: 170
+      width: 170,
+      editor: new InputEditor()
     },
     {
       title: "Signals",
@@ -126,7 +131,8 @@ function createColumns(): ColumnsDefine {
         key: `signal:${signalId}`,
         field: ["signalValues", signalId],
         title: signalId,
-        width: 76
+        width: 76,
+        editor: new InputEditor()
       }))
     }
   ];

@@ -10,9 +10,10 @@ import {
   useCallback,
   useState,
   type ChangeEvent,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type PointerEvent
 } from "react";
-import type { PatternReadClient } from "../shared/protocol";
+import type { PatternDocumentClient } from "../shared/protocol";
 import { PatternTable } from "./PatternTable";
 import { usePatternViewport } from "./usePatternViewport";
 import "./styles.css";
@@ -20,14 +21,13 @@ import "./styles.css";
 export function PatternEditorApp({
   client
 }: {
-  client: PatternReadClient;
+  client: PatternDocumentClient;
 }) {
   const controller = usePatternViewport(client);
   const [offsetValue, setOffsetValue] = useState("0");
 
   const goToOffset = useCallback(async () => {
-    const totalVectors =
-      controller.metadata?.totalVectors ?? 0;
+    const totalVectors = controller.state.totalVectors;
     const parsed = Number(offsetValue);
     const target =
       totalVectors <= 0
@@ -54,7 +54,10 @@ export function PatternEditorApp({
   };
 
   return (
-    <main className="page">
+    <main
+      className="page"
+      onPointerDown={() => controller.closeContextMenu()}
+    >
       <section
         className="goto-toolbar"
         aria-label="Pattern navigation"
@@ -70,7 +73,7 @@ export function PatternEditorApp({
             min="0"
             max={Math.max(
               0,
-              (controller.metadata?.totalVectors ?? 1) - 1
+              controller.state.totalVectors - 1
             )}
             step="1"
             value={offsetValue}
@@ -91,6 +94,17 @@ export function PatternEditorApp({
 
       <PatternTable bindings={controller.bindings} />
 
+      {controller.contextMenu ? (
+        <MutationContextMenu
+          key={`${controller.contextMenu.clientX}:${controller.contextMenu.clientY}`}
+          menu={controller.contextMenu}
+          disabled={controller.isMutating}
+          onInsert={controller.insertRows}
+          onDelete={controller.deleteSelectedRows}
+          onPointerDown={event => event.stopPropagation()}
+        />
+      ) : null}
+
       <footer
         className={
           controller.state.errorMessage
@@ -104,10 +118,11 @@ export function PatternEditorApp({
           Offset {formatNumber(
             controller.state.firstVisibleVectorIndex
           )}
+          {controller.isDirty ? " · Modified" : ""}
         </span>
         <span className="status-detail">
           {controller.state.errorMessage ??
-            `visible ${formatNumber(
+            `${controller.actionMessage} · visible ${formatNumber(
               controller.state.firstVisibleVectorIndex
             )}–${formatNumber(
               controller.state.lastVisibleVectorIndex
@@ -117,7 +132,8 @@ export function PatternEditorApp({
               controller.state.windowEndVectorIndex
             )} · cache ${controller.state.cacheEntries}/3`}
         </span>
-        {controller.state.isLoading ? (
+        {controller.state.isLoading ||
+        controller.isMutating ? (
           <span className="status-loading">Loading…</span>
         ) : null}
       </footer>
@@ -125,6 +141,106 @@ export function PatternEditorApp({
   );
 }
 
+function MutationContextMenu({
+  menu,
+  disabled,
+  onInsert,
+  onDelete,
+  onPointerDown
+}: {
+  menu: NonNullable<
+    ReturnType<typeof usePatternViewport>["contextMenu"]
+  >;
+  disabled: boolean;
+  onInsert(position: "above" | "below", count: number): void;
+  onDelete(): void;
+  onPointerDown(event: PointerEvent<HTMLDivElement>): void;
+}) {
+  const [countValue, setCountValue] = useState("1");
+  const count = clampInteger(Number(countValue), 1, 10_000);
+  const hasTarget = menu.targetVectorIndex !== null;
+  const left = Math.max(
+    6,
+    Math.min(menu.clientX, window.innerWidth - 224)
+  );
+  const top = Math.max(
+    6,
+    Math.min(menu.clientY, window.innerHeight - 190)
+  );
+
+  return (
+    <div
+      className="mutation-menu"
+      role="menu"
+      style={{ left, top }}
+      onPointerDown={onPointerDown}
+    >
+      <label className="mutation-count">
+        <span>行数</span>
+        <input
+          type="number"
+          min="1"
+          max="10000"
+          value={countValue}
+          onChange={event => setCountValue(event.target.value)}
+        />
+      </label>
+      {hasTarget ? (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={disabled}
+            onClick={() => onInsert("above", count)}
+          >
+            在上方插入
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={disabled}
+            onClick={() => onInsert("below", count)}
+          >
+            在下方插入
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          disabled={disabled}
+          onClick={() => onInsert("above", count)}
+        >
+          插入空白行
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        className="danger"
+        disabled={
+          disabled || menu.selectedRowKeys.length === 0
+        }
+        onClick={onDelete}
+      >
+        删除选中行（{menu.selectedRowKeys.length}）
+      </button>
+    </div>
+  );
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function clampInteger(
+  value: number,
+  min: number,
+  max: number
+): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(Math.max(Math.trunc(value), min), max);
 }

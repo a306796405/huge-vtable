@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { PatternEditorApp } from "./PatternEditorApp";
-import { createVsCodePatternReadClient } from "./patternReadClient";
+import { createVsCodePatternClient } from "./patternReadClient";
 
 const root = document.querySelector("#app");
 
@@ -9,5 +9,5 @@ if (!root) {
 }
 
 createRoot(root).render(
-  <PatternEditorApp client={createVsCodePatternReadClient()} />
+  <PatternEditorApp client={createVsCodePatternClient()} />
 );
