@@ -189,6 +189,48 @@ export function usePatternViewport(client: PatternDocumentClient) {
     };
   }, [client, metadata, tableAdapter]);
 
+  useEffect(() => {
+    return client.onDidChangeDocumentState?.(event => {
+      revisionRef.current = event.metadata.revision;
+      setIsDirty(event.metadata.isDirty);
+
+      if (event.action === "saved") {
+        setActionMessage("已保存到磁盘。");
+        return;
+      }
+
+      const viewport = viewportRef.current;
+
+      if (!viewport) {
+        return;
+      }
+
+      const snapshot = viewport.captureViewportSnapshot();
+      setIsMutating(true);
+      void viewport
+        .replaceDataset({
+          totalVectors: event.metadata.totalVectors,
+          revision: event.metadata.revision,
+          snapshot
+        })
+        .then(() => {
+          setActionMessage("已从磁盘恢复。");
+        })
+        .catch(error => {
+          console.error(
+            "[Pattern Editor Lite] revert reload failed",
+            error
+          );
+          setActionMessage(
+            `恢复显示失败：${toErrorMessage(error)}`
+          );
+        })
+        .finally(() => {
+          setIsMutating(false);
+        });
+    });
+  }, [client]);
+
   const runMutation = useCallback(
     async (
       operation: PatternMutationOperation,

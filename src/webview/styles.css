@@ -196,6 +196,71 @@ body {
   min-height: 0;
 }
 
+/*
+ * VTable 1.22.2 会用无 nonce 的 <style> 动态注入这些基础布局规则。
+ * 浏览器 Demo 允许该样式，但 VS Code Custom Editor 的 CSP 会拒绝它。
+ * 最明显的结果是 canvas 保持 inline 布局并向下偏移一行文本高度，导致
+ * 最后一条真实 record 和底部边框被 Surface 裁掉。
+ *
+ * 因此把当前锁定版本中实际使用的基础规则收进插件自己的静态 CSS。
+ * 这不是末尾 padding，也不会增加 record；升级 VTable 时只需在这里
+ * 对照其 core/style 复核一次。
+ */
+.vtable {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  text-align: left;
+  -webkit-font-smoothing: auto;
+}
+
+.vtable > canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 0;
+  height: 0;
+}
+
+.vtable .input-container,
+.vtable .table-scrollable,
+.vtable .table-component-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.vtable .table-scrollable {
+  overflow: scroll;
+}
+
+.vtable .table-component-container {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.vtable .table-focus-control {
+  position: relative !important;
+  width: 1px;
+  max-width: 500px;
+  height: 1px;
+  max-height: 500px;
+  padding: 0;
+  margin: 0;
+  float: none !important;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vtable input.table-focus-control.composition {
+  max-width: none;
+  max-height: none;
+  opacity: 1;
+}
+
 .mutation-menu {
   position: fixed;
   z-index: 20;

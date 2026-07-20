@@ -39,6 +39,25 @@ type InsertedPiece = {
 
 type Piece = BasePiece | InsertedPiece;
 
+export type SyntheticPatternStoreSnapshot = {
+  pieces: Array<
+    | {
+        kind: "base";
+        sourceStart: number;
+        count: number;
+      }
+    | {
+        kind: "inserted";
+        rows: Array<{
+          id: number;
+          payload: StoredPayload;
+        }>;
+      }
+  >;
+  baseOverrides: Array<[number, StoredPayload]>;
+  nextInsertedId: number;
+};
+
 type ResolvedRow = {
   pieceIndex: number;
   localIndex: number;
@@ -69,6 +88,26 @@ export class SyntheticPatternStore {
       totalVectors > 0
         ? [{ kind: "base", sourceStart: 0, count: totalVectors }]
         : [];
+  }
+
+  static fromSnapshot(
+    input: SyntheticPatternStoreSnapshot
+  ): SyntheticPatternStore {
+    const snapshot = validateSnapshot(input);
+    const store = new SyntheticPatternStore(0);
+
+    store.pieces = snapshot.pieces;
+    store.rowCount = snapshot.pieces.reduce(
+      (total, piece) => total + pieceRowCount(piece),
+      0
+    );
+    store.nextInsertedId = snapshot.nextInsertedId;
+
+    for (const [sourceIndex, payload] of snapshot.baseOverrides) {
+      store.baseOverrides.set(sourceIndex, payload);
+    }
+
+    return store;
   }
 
   get totalVectors(): number {
@@ -137,6 +176,29 @@ export class SyntheticPatternStore {
 
   getVectorIndex(rowKey: string): number {
     return this.resolveRow(rowKey).vectorIndex;
+  }
+
+  toSnapshot(): SyntheticPatternStoreSnapshot {
+    return {
+      pieces: this.pieces.map(piece =>
+        piece.kind === "base"
+          ? { ...piece }
+          : {
+              kind: "inserted",
+              rows: piece.rows.map(row => ({
+                id: row.id,
+                payload: clonePayload(row.payload)
+              }))
+            }
+      ),
+      baseOverrides: [...this.baseOverrides].map(
+        ([sourceIndex, payload]) => [
+          sourceIndex,
+          clonePayload(payload)
+        ]
+      ),
+      nextInsertedId: this.nextInsertedId
+    };
   }
 
   insertBlankRows(
@@ -752,4 +814,112 @@ function parseRowKey(
 
   const value = Number(rowKey.slice(marker.length));
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function validateSnapshot(
+  input: SyntheticPatternStoreSnapshot
+): SyntheticPatternStoreSnapshot {
+  if (!input || !Array.isArray(input.pieces)) {
+    throw new RangeError("Synthetic store snapshot is invalid.");
+  }
+
+  const insertedIds = new Set<number>();
+  const pieces: Piece[] = input.pieces.map(piece => {
+    if (
+      piece?.kind === "base" &&
+      isNonNegativeInteger(piece.sourceStart) &&
+      isPositiveInteger(piece.count)
+    ) {
+      return {
+        kind: "base",
+        sourceStart: piece.sourceStart,
+        count: piece.count
+      };
+    }
+
+    if (piece?.kind !== "inserted" || !Array.isArray(piece.rows)) {
+      throw new RangeError(
+        "Synthetic store contains an invalid piece."
+      );
+    }
+
+    return {
+      kind: "inserted",
+      rows: piece.rows.map(row => {
+        if (
+          !isPositiveInteger(row?.id) ||
+          insertedIds.has(row.id)
+        ) {
+          throw new RangeError(
+            "Synthetic store contains an invalid inserted row id."
+          );
+        }
+
+        insertedIds.add(row.id);
+        return {
+          id: row.id,
+          payload: validatePayload(row.payload)
+        };
+      })
+    };
+  });
+  const baseOverrides = Array.isArray(input.baseOverrides)
+    ? input.baseOverrides.map(entry => {
+        if (
+          !Array.isArray(entry) ||
+          !isNonNegativeInteger(entry[0])
+        ) {
+          throw new RangeError(
+            "Synthetic store contains an invalid base override."
+          );
+        }
+
+        return [
+          entry[0],
+          validatePayload(entry[1])
+        ] as [number, StoredPayload];
+      })
+    : [];
+  let highestInsertedId = 0;
+
+  for (const insertedId of insertedIds) {
+    highestInsertedId = Math.max(
+      highestInsertedId,
+      insertedId
+    );
+  }
+  const nextInsertedId = Math.max(
+    highestInsertedId + 1,
+    isPositiveInteger(input.nextInsertedId)
+      ? input.nextInsertedId
+      : 1
+  );
+
+  return { pieces, baseOverrides, nextInsertedId };
+}
+
+function validatePayload(input: StoredPayload): StoredPayload {
+  if (
+    !input ||
+    typeof input.instruction !== "string" ||
+    typeof input.comment !== "string" ||
+    !input.signalValues ||
+    SIGNAL_IDS.some(
+      signalId => typeof input.signalValues[signalId] !== "string"
+    )
+  ) {
+    throw new RangeError(
+      "Synthetic store contains an invalid row payload."
+    );
+  }
+
+  return clonePayload(input);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
 }

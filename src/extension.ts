@@ -21,6 +21,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     output,
+    provider,
     vscode.window.registerCustomEditorProvider(
       PatternEditorProvider.viewType,
       provider,

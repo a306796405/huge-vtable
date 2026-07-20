@@ -7,9 +7,10 @@
  */
 
 import type {
-  ExtensionResponseMessage,
+  ExtensionToWebviewMessage,
   PatternCommand,
   PatternDocumentClient,
+  PatternDocumentStateEvent,
   PatternMetadata,
   PatternMutationRequest,
   PatternMutationResponse,
@@ -43,13 +44,24 @@ export class PatternRequestFailedError extends Error {
 export function createVsCodePatternClient(): PatternDocumentClient {
   const vscode = acquireVsCodeApi();
   const pending = new Map<number, PendingRequest>();
+  const documentStateListeners = new Set<
+    (event: PatternDocumentStateEvent) => void
+  >();
   let nextId = 1;
   let disposed = false;
 
   const handleMessage = (
-    event: MessageEvent<ExtensionResponseMessage>
+    event: MessageEvent<ExtensionToWebviewMessage>
   ) => {
     const message = event.data;
+
+    if (message?.kind === "documentState") {
+      for (const listener of documentStateListeners) {
+        listener(message.event);
+      }
+
+      return;
+    }
 
     if (
       !message ||
@@ -118,6 +130,10 @@ export function createVsCodePatternClient(): PatternDocumentClient {
         mutationRequest
       );
     },
+    onDidChangeDocumentState(listener) {
+      documentStateListeners.add(listener);
+      return () => documentStateListeners.delete(listener);
+    },
     dispose() {
       disposed = true;
       window.removeEventListener("message", handleMessage);
@@ -129,6 +145,7 @@ export function createVsCodePatternClient(): PatternDocumentClient {
       }
 
       pending.clear();
+      documentStateListeners.clear();
     }
   };
 }

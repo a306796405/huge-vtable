@@ -320,6 +320,16 @@ export class LogicalViewport {
       return;
     }
 
+    /*
+     * VS Code 改变 zoom 时，CSS 像素下的 body 高度也会改变。若刷新前
+     * 已经位于数据集末尾，旧 maxLogicalScrollTopPx 在新布局中可能不再
+     * 是末尾；直接 clamp 会让最后几行掉出视口。先保存“贴底”语义，
+     * 测量完成后再使用新的最大值。
+     */
+    const wasAtDatasetEnd =
+      this.logicalScrollTopPx >=
+      this.geometry.maxLogicalScrollTopPx - 0.5;
+
     this.options.table.resize();
     await this.options.table.whenLayoutReady();
 
@@ -328,11 +338,13 @@ export class LogicalViewport {
     }
 
     this.geometry = this.measureGeometry();
-    this.logicalScrollTopPx = clampNumber(
-      this.logicalScrollTopPx,
-      0,
-      this.geometry.maxLogicalScrollTopPx
-    );
+    this.logicalScrollTopPx = wasAtDatasetEnd
+      ? this.geometry.maxLogicalScrollTopPx
+      : clampNumber(
+          this.logicalScrollTopPx,
+          0,
+          this.geometry.maxLogicalScrollTopPx
+        );
     this.updateSpacer();
     this.writeOuterScroll();
     await this.syncNow();

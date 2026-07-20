@@ -1,6 +1,6 @@
 # v22-lite 后续扩展边界
 
-本文只记录后续应该接在哪里，不为未实现需求提前生成代码。
+本文只记录尚未实现的能力应该接在哪里，不为后续需求提前生成代码。
 
 ## 必须保持的边界
 
@@ -14,9 +14,8 @@
 
 | 功能 | 后端职责 | 前端接入点 |
 | --- | --- | --- |
-| Insert/Delete/Update | C++ 文档结构和一次 revision | 增加 `applyMutation()`，成功后让 viewport 失效并重读 |
-| Paste | 一次事务完成已有行更新和尾部追加 | 解析 TSV、提交一个 paste operation |
-| Undo/Redo/Save | C++ 会话历史和文件持久化 | Provider 升级为可编辑 Custom Editor |
+| C++ Mutation 接入 | C++ 文档结构和一次 revision | 替换当前 synthetic `applyMutation()` 实现 |
+| Undo/Redo | C++ 会话历史和逆向 effects | Provider 改用 `CustomDocumentEditEvent` |
 | 动态 Signal | Signal Catalog、稳定 signalId、projection | `PatternTable` 根据当前 Layout 创建 columns |
 | Configure Layout | 不修改文档 | 保存到 VS Code 用户/workspace state |
 | 静态 Cycle | 显式重新计算派生数据 | 过期时灰显并禁用静态 Cycle 搜索 |

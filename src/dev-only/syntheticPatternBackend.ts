@@ -18,6 +18,7 @@ import {
 } from "../shared/protocol";
 import {
   SyntheticPatternStore,
+  type SyntheticPatternStoreSnapshot,
   type StoreMutationResult
 } from "./syntheticPatternStore";
 
@@ -32,6 +33,16 @@ export type SyntheticPatternOptions = {
   totalVectors?: number;
   revision?: number;
   delayMs?: number;
+  storeSnapshot?: SyntheticPatternStoreSnapshot;
+  isDirty?: boolean;
+};
+
+type SyntheticPatternFile = {
+  format: "pattern-vtable-v22-lite-synthetic";
+  version: 1;
+  revision: number;
+  totalVectors: number;
+  store: SyntheticPatternStoreSnapshot;
 };
 
 export class SyntheticPatternBackend implements PatternBackend {
@@ -47,13 +58,68 @@ export class SyntheticPatternBackend implements PatternBackend {
       MAX_TOTAL_VECTORS
     );
 
-    this.store = new SyntheticPatternStore(totalVectors);
+    this.store = options.storeSnapshot
+      ? SyntheticPatternStore.fromSnapshot(options.storeSnapshot)
+      : new SyntheticPatternStore(totalVectors);
+
+    if (this.store.totalVectors > MAX_TOTAL_VECTORS) {
+      throw new RangeError(
+        `Pattern cannot exceed ${MAX_TOTAL_VECTORS} vectors.`
+      );
+    }
+
     this.revision = clampInteger(
       options.revision ?? 0,
       0,
       Number.MAX_SAFE_INTEGER
     );
     this.delayMs = clampInteger(options.delayMs ?? 0, 0, 5_000);
+    this.dirty = options.isDirty ?? false;
+  }
+
+  static fromBytes(
+    bytes: Uint8Array,
+    options: { isDirty?: boolean } = {}
+  ): SyntheticPatternBackend {
+    const text = new TextDecoder().decode(bytes).trim();
+
+    if (!text) {
+      return new SyntheticPatternBackend({
+        totalVectors: DEFAULT_TOTAL_VECTORS,
+        isDirty: options.isDirty
+      });
+    }
+
+    const parsed = JSON.parse(text) as unknown;
+
+    if (
+      isObjectRecord(parsed) &&
+      "format" in parsed &&
+      parsed.format === "pattern-vtable-v22-lite-synthetic" &&
+      "version" in parsed &&
+      parsed.version === 1 &&
+      "store" in parsed &&
+      parsed.store
+    ) {
+      return new SyntheticPatternBackend({
+        revision:
+          typeof parsed.revision === "number"
+            ? parsed.revision
+            : 0,
+        storeSnapshot:
+          parsed.store as SyntheticPatternStoreSnapshot,
+        isDirty: options.isDirty
+      });
+    }
+
+    return new SyntheticPatternBackend({
+      totalVectors:
+        isObjectRecord(parsed) &&
+        typeof parsed.totalVectors === "number"
+          ? parsed.totalVectors
+          : DEFAULT_TOTAL_VECTORS,
+      isDirty: options.isDirty
+    });
   }
 
   async getMetadata(): Promise<PatternMetadata> {
@@ -116,6 +182,24 @@ export class SyntheticPatternBackend implements PatternBackend {
       updatedRows: result.updatedRows,
       message: mutationMessage(request.operation, result)
     };
+  }
+
+  serialize(): Uint8Array {
+    const file: SyntheticPatternFile = {
+      format: "pattern-vtable-v22-lite-synthetic",
+      version: 1,
+      revision: this.revision,
+      totalVectors: this.store.totalVectors,
+      store: this.store.toSnapshot()
+    };
+
+    return new TextEncoder().encode(
+      `${JSON.stringify(file, null, 2)}\n`
+    );
+  }
+
+  markSaved(): void {
+    this.dirty = false;
   }
 
   private execute(
@@ -358,4 +442,10 @@ function clampInteger(
   }
 
   return Math.min(Math.max(Math.trunc(value), min), max);
+}
+
+function isObjectRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

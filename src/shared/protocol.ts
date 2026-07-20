@@ -138,8 +138,16 @@ export interface PatternDocumentClient {
   applyMutation(
     request: PatternMutationRequest
   ): Promise<PatternMutationResponse>;
+  onDidChangeDocumentState?(
+    listener: (event: PatternDocumentStateEvent) => void
+  ): () => void;
   dispose?(): void;
 }
+
+export type PatternDocumentStateEvent = {
+  action: "saved" | "reverted";
+  metadata: PatternMetadata;
+};
 
 export type PatternCommand =
   | "getMetadata"
@@ -184,3 +192,12 @@ export type ExtensionResponseMessage =
       ok: false;
       error: PatternRequestError;
     };
+
+export type ExtensionDocumentStateMessage = {
+  kind: "documentState";
+  event: PatternDocumentStateEvent;
+};
+
+export type ExtensionToWebviewMessage =
+  | ExtensionResponseMessage
+  | ExtensionDocumentStateMessage;

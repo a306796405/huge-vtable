@@ -2,17 +2,19 @@
  * 阅读等级：A 业务必读
  * 是否迁移：是
  * 前置阅读：patternBackend.ts、shared/protocol.ts
- * 建议只关注：打开文档、两条请求路由和单编辑器注册
- * 可以跳过：CSP nonce
+ * 建议只关注：请求路由、dirty 事件、Save/Revert/Backup
+ * 可以跳过：CSP nonce 和 HTML 模板
  *
- * 第一版使用 CustomReadonlyEditorProvider，因此没有 save、backup、undo 或
- * dirty 生命周期。未来切到可编辑 provider 时，Webview 的只读窗口链路不变。
+ * 一个 .pat 只对应一个 PatternEditableDocument 和一个 webview panel。
+ * provider 负责 VS Code 文件生命周期，字段校验和事务仍属于 backend。
  */
 
 import * as vscode from "vscode";
 import { SyntheticPatternBackend } from "../dev-only/syntheticPatternBackend";
 import type {
   ExtensionResponseMessage,
+  ExtensionToWebviewMessage,
+  PatternDocumentStateEvent,
   PatternMutationRequest,
   PatternRequestError,
   PatternWindowRequest,
@@ -20,22 +22,34 @@ import type {
 } from "../shared/protocol";
 import type { PatternBackend } from "./patternBackend";
 
-class PatternReadonlyDocument implements vscode.CustomDocument {
+class PatternEditableDocument implements vscode.CustomDocument {
+  panel: vscode.WebviewPanel | undefined;
+
   constructor(
     readonly uri: vscode.Uri,
-    readonly backend: PatternBackend
+    public backend: PatternBackend
   ) {}
 
   dispose(): void {
     this.backend.dispose?.();
+    this.panel = undefined;
   }
 }
 
 export class PatternEditorProvider
   implements
-    vscode.CustomReadonlyEditorProvider<PatternReadonlyDocument>
+    vscode.CustomEditorProvider<PatternEditableDocument>,
+    vscode.Disposable
 {
   static readonly viewType = "patternEditorLite.patEditor";
+
+  private readonly changeEmitter =
+    new vscode.EventEmitter<
+      vscode.CustomDocumentContentChangeEvent<PatternEditableDocument>
+    >();
+
+  readonly onDidChangeCustomDocument =
+    this.changeEmitter.event;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -43,18 +57,33 @@ export class PatternEditorProvider
   ) {}
 
   async openCustomDocument(
-    uri: vscode.Uri
-  ): Promise<PatternReadonlyDocument> {
-    const totalVectors = await readSyntheticTotalVectors(uri);
+    uri: vscode.Uri,
+    openContext: vscode.CustomDocumentOpenContext,
+    token: vscode.CancellationToken
+  ): Promise<PatternEditableDocument> {
+    const restoredFromBackup = Boolean(openContext.backupId);
+    const bytes =
+      openContext.untitledDocumentData ??
+      (await vscode.workspace.fs.readFile(
+        openContext.backupId
+          ? vscode.Uri.parse(openContext.backupId)
+          : uri
+      ));
 
-    return new PatternReadonlyDocument(
+    if (token.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
+    return new PatternEditableDocument(
       uri,
-      new SyntheticPatternBackend({ totalVectors })
+      SyntheticPatternBackend.fromBytes(bytes, {
+        isDirty: restoredFromBackup
+      })
     );
   }
 
   async resolveCustomEditor(
-    document: PatternReadonlyDocument,
+    document: PatternEditableDocument,
     panel: vscode.WebviewPanel
   ): Promise<void> {
     const webviewRoot = vscode.Uri.joinPath(
@@ -63,6 +92,7 @@ export class PatternEditorProvider
       "webview"
     );
 
+    document.panel = panel;
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [webviewRoot]
@@ -76,15 +106,103 @@ export class PatternEditorProvider
           rawMessage as WebviewRequestMessage
         );
       });
-    panel.onDidDispose(() => receiveDisposable.dispose());
+    panel.onDidDispose(() => {
+      receiveDisposable.dispose();
+
+      if (document.panel === panel) {
+        document.panel = undefined;
+      }
+    });
     panel.webview.html = createWebviewHtml(
       panel.webview,
       this.extensionUri
     );
   }
 
+  async saveCustomDocument(
+    document: PatternEditableDocument,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    await this.writeDocument(document, document.uri, token);
+    await this.postDocumentState(document, "saved");
+  }
+
+  async saveCustomDocumentAs(
+    document: PatternEditableDocument,
+    destination: vscode.Uri,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    await this.writeDocument(document, destination, token);
+    await this.postDocumentState(document, "saved");
+  }
+
+  async revertCustomDocument(
+    document: PatternEditableDocument,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    const bytes = await vscode.workspace.fs.readFile(document.uri);
+
+    if (token.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
+    const previousBackend = document.backend;
+    document.backend = SyntheticPatternBackend.fromBytes(bytes);
+    previousBackend.dispose?.();
+    await this.postDocumentState(document, "reverted");
+  }
+
+  async backupCustomDocument(
+    document: PatternEditableDocument,
+    context: vscode.CustomDocumentBackupContext,
+    token: vscode.CancellationToken
+  ): Promise<vscode.CustomDocumentBackup> {
+    const bytes = await document.backend.serialize();
+
+    if (token.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
+    await vscode.workspace.fs.createDirectory(
+      parentUri(context.destination)
+    );
+    await vscode.workspace.fs.writeFile(
+      context.destination,
+      bytes
+    );
+
+    return {
+      id: context.destination.toString(),
+      delete: () => {
+        void vscode.workspace.fs.delete(context.destination).then(
+          () => undefined,
+          () => undefined
+        );
+      }
+    };
+  }
+
+  dispose(): void {
+    this.changeEmitter.dispose();
+  }
+
+  private async writeDocument(
+    document: PatternEditableDocument,
+    destination: vscode.Uri,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    const bytes = await document.backend.serialize();
+
+    if (token.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
+    await vscode.workspace.fs.writeFile(destination, bytes);
+    document.backend.markSaved();
+  }
+
   private async handleMessage(
-    document: PatternReadonlyDocument,
+    document: PatternEditableDocument,
     webview: vscode.Webview,
     message: WebviewRequestMessage
   ): Promise<void> {
@@ -116,22 +234,29 @@ export class PatternEditorProvider
             )
           });
           return;
-        case "applyMutation":
+        case "applyMutation": {
           if (!message.payload) {
             throw new RangeError(
               "applyMutation payload is required."
             );
           }
 
+          const result = await document.backend.applyMutation(
+            message.payload as PatternMutationRequest
+          );
           await respond(webview, {
             kind: "response",
             id: message.id,
             ok: true,
-            payload: await document.backend.applyMutation(
-              message.payload as PatternMutationRequest
-            )
+            payload: result
           });
+
+          if (result.revision !== result.previousRevision) {
+            this.changeEmitter.fire({ document });
+          }
+
           return;
+        }
       }
     } catch (error) {
       const responseError = toPatternRequestError(
@@ -151,23 +276,35 @@ export class PatternEditorProvider
       });
     }
   }
+
+  private async postDocumentState(
+    document: PatternEditableDocument,
+    action: PatternDocumentStateEvent["action"]
+  ): Promise<void> {
+    if (!document.panel) {
+      return;
+    }
+
+    const message: ExtensionToWebviewMessage = {
+      kind: "documentState",
+      event: {
+        action,
+        metadata: await document.backend.getMetadata()
+      }
+    };
+    await document.panel.webview.postMessage(message);
+  }
 }
 
-async function readSyntheticTotalVectors(
-  uri: vscode.Uri
-): Promise<number> {
-  try {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    const parsed = JSON.parse(
-      new TextDecoder().decode(bytes)
-    ) as { totalVectors?: unknown };
+function parentUri(uri: vscode.Uri): vscode.Uri {
+  const separatorIndex = uri.path.lastIndexOf("/");
 
-    return typeof parsed.totalVectors === "number"
-      ? parsed.totalVectors
-      : 100_000_000;
-  } catch {
-    return 100_000_000;
-  }
+  return uri.with({
+    path:
+      separatorIndex > 0
+        ? uri.path.slice(0, separatorIndex)
+        : "/"
+  });
 }
 
 function toPatternRequestError(
@@ -232,11 +369,6 @@ function createWebviewHtml(
   const nonce = `${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2)}`;
-  /*
-   * Extension Development Host 会缓存 vscode-webview 资源。给每个 panel
-   * 的 bundle URL 增加版本参数，重新构建并 Reload Window 后就不会继续
-   * 使用旧 Canvas 逻辑；正式插件中也只影响一次本地资源读取。
-   */
   const assetVersion = Date.now().toString(36);
 
   return `<!doctype html>

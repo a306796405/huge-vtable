@@ -198,41 +198,53 @@ export function createVTableAdapter(
       return () => table.off(listenerId);
     },
     observeContextMenu(listener) {
-      const listenerId = table.on(
-        "contextmenu_cell",
-        event => {
-          event.event?.preventDefault();
-          const targetRow = table.getCellOriginRecord(
-            event.col,
-            event.row
-          ) as PatternRenderRow | undefined;
+      const element = table.getElement();
+      const handleContextMenu = (event: MouseEvent) => {
+        event.preventDefault();
+        const bounds = element.getBoundingClientRect();
+        const cell = table.getCellAtRelativePosition(
+          event.clientX - bounds.left,
+          event.clientY - bounds.top
+        );
+        const targetRow = table.getCellOriginRecord(
+          cell.col,
+          cell.row
+        ) as PatternRenderRow | undefined;
 
-          if (!targetRow) {
-            return;
-          }
-
-          const ranges = table.getSelectedCellRanges();
-          const targetInsideSelection = ranges.some(range =>
-            cellInsideRange(event.col, event.row, range)
-          );
-          const selectedRows = targetInsideSelection
-            ? collectSelectedRows(table, ranges, event.col)
-            : [targetRow];
-          const mouseEvent = event.event as
-            | MouseEvent
-            | PointerEvent
-            | undefined;
-
-          listener({
-            clientX: mouseEvent?.clientX ?? 0,
-            clientY: mouseEvent?.clientY ?? 0,
-            targetRow,
-            selectedRows
-          });
+        /*
+         * VTable 的 `contextmenu_cell` 依赖 VRender 的 rightdown 事件；
+         * 在 Electron/自动化环境中可能只收到原生 contextmenu。这里直接
+         * 使用 VTable 公开的坐标命中 API，浏览器与 VS Code 走同一条路径。
+         */
+        if (!targetRow) {
+          return;
         }
-      );
 
-      return () => table.off(listenerId);
+        const ranges = table.getSelectedCellRanges();
+        const targetInsideSelection = ranges.some(range =>
+          cellInsideRange(cell.col, cell.row, range)
+        );
+        const selectedRows = targetInsideSelection
+          ? collectSelectedRows(table, ranges, cell.col)
+          : [targetRow];
+
+        listener({
+          clientX: event.clientX,
+          clientY: event.clientY,
+          targetRow,
+          selectedRows
+        });
+      };
+
+      element.addEventListener(
+        "contextmenu",
+        handleContextMenu
+      );
+      return () =>
+        element.removeEventListener(
+          "contextmenu",
+          handleContextMenu
+        );
     },
     observePaste(listener) {
       const element = table.getElement();
