@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM"],
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/core/**/*",
+    "src/shared/**/*",
+    "src/webview/**/*",
+    "src/dev-only/**/*"
+  ],
+  "exclude": [
+    "src/extension.ts",
+    "src/extension/**/*"
+  ]
+}

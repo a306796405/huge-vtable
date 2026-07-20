@@ -1,0 +1,253 @@
+:root {
+  color: #182033;
+  background: #f3f5f8;
+  font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.bootstrap-error {
+  min-height: 100dvh;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: #b42318;
+  background: #fff7f6;
+  white-space: pre-wrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+  background: #f3f5f8;
+}
+
+/* 保留 v22 主插件页面已经确认合适的 Go To 尺寸。 */
+.goto-toolbar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex: 0 0 42px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid #d6dbe4;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.goto-field {
+  display: block;
+  flex: 0 1 220px;
+  min-width: 0;
+}
+
+.goto-field input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid #c6ceda;
+  border-radius: 4px;
+  padding: 0 8px;
+  color: #172033;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.goto-field input:focus {
+  border-color: #4b78e6;
+  outline: 2px solid rgba(75, 120, 230, 0.16);
+  outline-offset: -1px;
+}
+
+.goto-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: 1px solid #2457c5;
+  border-radius: 4px;
+  padding: 0 12px;
+  color: #fff;
+  background: #2f66d5;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.goto-toolbar button:hover {
+  background: #285bc3;
+}
+
+.goto-toolbar button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.table-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #cfd5df;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.logical-scroll {
+  position: absolute;
+  /*
+   * VS Code webview 在部分缩放比下会裁掉 Canvas 最底部约一个
+   * VTable scrollbar 高度。保留 12px 安全区，确保末行和横向滚动条
+   * 都完整位于可视区域；该值与 vtableAdapter 中的常量保持一致。
+   */
+  inset: 0 0 12px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  color-scheme: light;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(100, 116, 139, 0.82)
+    rgba(226, 232, 240, 0.72);
+}
+
+.logical-scroll::-webkit-scrollbar {
+  width: 12px;
+}
+
+.logical-scroll::-webkit-scrollbar-track {
+  background: rgba(226, 232, 240, 0.72);
+}
+
+.logical-scroll::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid #edf1f5;
+  border-radius: 6px;
+  background: rgba(100, 116, 139, 0.82);
+}
+
+.logical-scroll::-webkit-scrollbar-thumb:hover,
+.logical-scroll::-webkit-scrollbar-thumb:active {
+  background: rgba(71, 85, 105, 0.94);
+}
+
+.virtual-spacer {
+  width: 1px;
+  min-height: 100%;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.table-overlay {
+  position: absolute;
+  inset: 0 12px 12px 0;
+  z-index: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+  outline: none;
+}
+
+.table-overlay:focus {
+  box-shadow: inset 0 0 0 2px rgba(47, 102, 213, 0.18);
+}
+
+.vtable-instance {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.status-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 26px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 7px;
+  border: 1px solid #d6dbe4;
+  border-radius: 4px;
+  color: #4d596d;
+  background: #fff;
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.status-main {
+  flex: 0 0 auto;
+  color: #263247;
+  white-space: nowrap;
+}
+
+.status-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: #69758a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-loading {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #4266af;
+}
+
+.status-bar.has-error,
+.status-bar.has-error .status-detail {
+  color: #a3362d;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 6px;
+  }
+
+  .goto-field {
+    flex: 1 1 auto;
+  }
+
+  .status-detail {
+    display: none;
+  }
+}

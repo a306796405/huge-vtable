@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run V22 Lite - 100M",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}",
+        "${workspaceFolder}/examples/synthetic-100m.pat"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/extension/**/*.js"
+      ],
+      "preLaunchTask": "build v22-lite"
+    },
+    {
+      "name": "Run V22 Lite - 300M",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}",
+        "${workspaceFolder}/examples/synthetic-300m.pat"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/extension/**/*.js"
+      ],
+      "preLaunchTask": "build v22-lite"
+    }
+  ]
+}
