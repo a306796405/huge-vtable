@@ -9,7 +9,11 @@
 import type { PatternBackend } from "../extension/patternBackend";
 import {
   isPatternEditableColumnId,
+  type PatternDocumentStateEvent,
+  type PatternHistoryDirection,
+  type PatternHistoryResponse,
   type PatternMetadata,
+  type PatternMutationEffect,
   type PatternMutationOperation,
   type PatternMutationRequest,
   type PatternMutationResponse,
@@ -45,11 +49,30 @@ type SyntheticPatternFile = {
   store: SyntheticPatternStoreSnapshot;
 };
 
+type ContentState = {
+  id: number;
+  store: SyntheticPatternStoreSnapshot;
+};
+
+type HistoryEntry = {
+  before: ContentState;
+  after: ContentState;
+  forwardEffects: PatternMutationEffect[];
+  inverseEffects: PatternMutationEffect[];
+};
+
 export class SyntheticPatternBackend implements PatternBackend {
-  private readonly store: SyntheticPatternStore;
+  private store: SyntheticPatternStore;
   private revision: number;
-  private dirty = false;
   private readonly delayMs: number;
+  private readonly undoStack: HistoryEntry[] = [];
+  private readonly redoStack: HistoryEntry[] = [];
+  private readonly documentStateListeners = new Set<
+    (event: PatternDocumentStateEvent) => void
+  >();
+  private currentContentStateId = 0;
+  private savedContentStateId = 0;
+  private nextContentStateId = 1;
 
   constructor(options: SyntheticPatternOptions = {}) {
     const totalVectors = clampInteger(
@@ -74,7 +97,7 @@ export class SyntheticPatternBackend implements PatternBackend {
       Number.MAX_SAFE_INTEGER
     );
     this.delayMs = clampInteger(options.delayMs ?? 0, 0, 5_000);
-    this.dirty = options.isDirty ?? false;
+    this.savedContentStateId = options.isDirty ? -1 : 0;
   }
 
   static fromBytes(
@@ -166,12 +189,25 @@ export class SyntheticPatternBackend implements PatternBackend {
     this.assertRevision(request.baseRevision);
 
     const previousRevision = this.revision;
+    const before = this.captureContentState(
+      this.currentContentStateId
+    );
     const result = this.execute(request.operation);
     const changed = result.effects.length > 0;
 
     if (changed) {
       this.revision += 1;
-      this.dirty = true;
+      this.currentContentStateId = this.nextContentStateId++;
+      const after = this.captureContentState(
+        this.currentContentStateId
+      );
+      this.undoStack.push({
+        before,
+        after,
+        forwardEffects: cloneEffects(result.effects),
+        inverseEffects: invertEffects(result.effects)
+      });
+      this.redoStack.length = 0;
     }
 
     return {
@@ -199,7 +235,83 @@ export class SyntheticPatternBackend implements PatternBackend {
   }
 
   markSaved(): void {
-    this.dirty = false;
+    this.savedContentStateId = this.currentContentStateId;
+  }
+
+  undo(): PatternHistoryResponse {
+    const entry = this.undoStack.pop();
+
+    if (!entry) {
+      return this.createHistoryResponse(
+        this.revision,
+        [],
+        "没有可撤销的操作。"
+      );
+    }
+
+    const previousRevision = this.revision;
+    this.restoreContentState(entry.before);
+    this.redoStack.push(entry);
+    this.revision += 1;
+
+    return this.createHistoryResponse(
+      previousRevision,
+      entry.inverseEffects,
+      "已撤销上一项操作。"
+    );
+  }
+
+  redo(): PatternHistoryResponse {
+    const entry = this.redoStack.pop();
+
+    if (!entry) {
+      return this.createHistoryResponse(
+        this.revision,
+        [],
+        "没有可重做的操作。"
+      );
+    }
+
+    const previousRevision = this.revision;
+    this.restoreContentState(entry.after);
+    this.undoStack.push(entry);
+    this.revision += 1;
+
+    return this.createHistoryResponse(
+      previousRevision,
+      entry.forwardEffects,
+      "已重做上一项操作。"
+    );
+  }
+
+  async runHistory(
+    direction: PatternHistoryDirection
+  ): Promise<PatternMetadata> {
+    const result =
+      direction === "undo" ? this.undo() : this.redo();
+    const event: PatternDocumentStateEvent = {
+      action: direction === "undo" ? "undone" : "redone",
+      metadata: this.createMetadata(),
+      effects: result.effects,
+      message: result.message
+    };
+
+    for (const listener of this.documentStateListeners) {
+      listener(event);
+    }
+
+    return event.metadata;
+  }
+
+  onDidChangeDocumentState(
+    listener: (event: PatternDocumentStateEvent) => void
+  ): () => void {
+    this.documentStateListeners.add(listener);
+    return () => this.documentStateListeners.delete(listener);
+  }
+
+  dispose(): void {
+    this.documentStateListeners.clear();
   }
 
   private execute(
@@ -251,7 +363,36 @@ export class SyntheticPatternBackend implements PatternBackend {
     return {
       totalVectors: this.store.totalVectors,
       revision: this.revision,
-      isDirty: this.dirty
+      isDirty:
+        this.currentContentStateId !==
+        this.savedContentStateId,
+      canUndo: this.undoStack.length > 0,
+      canRedo: this.redoStack.length > 0
+    };
+  }
+
+  private captureContentState(id: number): ContentState {
+    return {
+      id,
+      store: this.store.toSnapshot()
+    };
+  }
+
+  private restoreContentState(state: ContentState): void {
+    this.store = SyntheticPatternStore.fromSnapshot(state.store);
+    this.currentContentStateId = state.id;
+  }
+
+  private createHistoryResponse(
+    previousRevision: number,
+    effects: PatternMutationEffect[],
+    message: string
+  ): PatternHistoryResponse {
+    return {
+      ...this.createMetadata(),
+      previousRevision,
+      effects: cloneEffects(effects),
+      message
     };
   }
 
@@ -270,6 +411,60 @@ export class SyntheticPatternBackend implements PatternBackend {
       );
     }
   }
+}
+
+function cloneEffects(
+  effects: readonly PatternMutationEffect[]
+): PatternMutationEffect[] {
+  return effects.map(effect => ({ ...effect }));
+}
+
+/**
+ * effect 的 startVectorIndex 以事务开始时的数据集为坐标。这里先换算出
+ * 每个结构操作实际落在提交后数据集的位置，再把 insert/delete 对调，
+ * 使 Undo 仍可复用前端同一套视口锚点映射。
+ */
+function invertEffects(
+  effects: readonly PatternMutationEffect[]
+): PatternMutationEffect[] {
+  let accumulatedShift = 0;
+  const cellEffects: PatternMutationEffect[] = [];
+  const structuralEffects: PatternMutationEffect[] = [];
+
+  for (const effect of effects) {
+    if (effect.kind === "cellsUpdated") {
+      cellEffects.push({ ...effect });
+      continue;
+    }
+
+    const appliedStartVectorIndex =
+      effect.startVectorIndex + accumulatedShift;
+
+    structuralEffects.push(
+      effect.kind === "rowsInserted"
+        ? {
+            kind: "rowsDeleted",
+            startVectorIndex: appliedStartVectorIndex,
+            count: effect.count
+          }
+        : {
+            kind: "rowsInserted",
+            startVectorIndex: appliedStartVectorIndex,
+            count: effect.count
+          }
+    );
+    accumulatedShift +=
+      effect.kind === "rowsInserted"
+        ? effect.count
+        : -effect.count;
+  }
+
+  structuralEffects.sort(
+    (left, right) =>
+      left.startVectorIndex - right.startVectorIndex
+  );
+
+  return [...cellEffects, ...structuralEffects];
 }
 
 function validateWindowRequest(

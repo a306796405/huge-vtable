@@ -121,6 +121,21 @@ body {
   opacity: 0.58;
 }
 
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
+}
+
+.goto-toolbar button.secondary {
+  border-color: #b9c2cf;
+  color: #263247;
+  background: #fff;
+}
+
+.goto-toolbar button.secondary:hover:not(:disabled) {
+  background: #eef2f6;
+}
+
 .table-shell {
   position: relative;
   flex: 1 1 auto;

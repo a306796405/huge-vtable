@@ -11,6 +11,7 @@ import type {
   PatternCommand,
   PatternDocumentClient,
   PatternDocumentStateEvent,
+  PatternHistoryDirection,
   PatternMetadata,
   PatternMutationRequest,
   PatternMutationResponse,
@@ -128,6 +129,12 @@ export function createVsCodePatternClient(): PatternDocumentClient {
       return request<PatternMutationResponse>(
         "applyMutation",
         mutationRequest
+      );
+    },
+    runHistory(direction: PatternHistoryDirection) {
+      return request<PatternMetadata>(
+        "runHistory",
+        direction
       );
     },
     onDidChangeDocumentState(listener) {

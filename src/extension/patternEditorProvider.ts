@@ -15,6 +15,8 @@ import type {
   ExtensionResponseMessage,
   ExtensionToWebviewMessage,
   PatternDocumentStateEvent,
+  PatternHistoryDirection,
+  PatternHistoryResponse,
   PatternMutationRequest,
   PatternRequestError,
   PatternWindowRequest,
@@ -45,7 +47,7 @@ export class PatternEditorProvider
 
   private readonly changeEmitter =
     new vscode.EventEmitter<
-      vscode.CustomDocumentContentChangeEvent<PatternEditableDocument>
+      vscode.CustomDocumentEditEvent<PatternEditableDocument>
     >();
 
   readonly onDidChangeCustomDocument =
@@ -252,9 +254,49 @@ export class PatternEditorProvider
           });
 
           if (result.revision !== result.previousRevision) {
-            this.changeEmitter.fire({ document });
+            this.changeEmitter.fire({
+              document,
+              label: result.message,
+              undo: async () => {
+                await this.applyHistory(
+                  document,
+                  "undo"
+                );
+              },
+              redo: async () => {
+                await this.applyHistory(
+                  document,
+                  "redo"
+                );
+              }
+            });
           }
 
+          return;
+        }
+        case "runHistory": {
+          if (
+            message.payload !== "undo" &&
+            message.payload !== "redo"
+          ) {
+            throw new RangeError(
+              "runHistory payload must be undo or redo."
+            );
+          }
+
+          /*
+           * 工具栏也走 VS Code 原生命令，让它和 Cmd/Ctrl+Z 共用同一条
+           * CustomDocumentEditEvent 历史链，避免 Webview 自建第二套栈。
+           */
+          await vscode.commands.executeCommand(
+            message.payload as PatternHistoryDirection
+          );
+          await respond(webview, {
+            kind: "response",
+            id: message.id,
+            ok: true,
+            payload: await document.backend.getMetadata()
+          });
           return;
         }
       }
@@ -279,7 +321,8 @@ export class PatternEditorProvider
 
   private async postDocumentState(
     document: PatternEditableDocument,
-    action: PatternDocumentStateEvent["action"]
+    action: PatternDocumentStateEvent["action"],
+    history?: PatternHistoryResponse
   ): Promise<void> {
     if (!document.panel) {
       return;
@@ -289,10 +332,37 @@ export class PatternEditorProvider
       kind: "documentState",
       event: {
         action,
-        metadata: await document.backend.getMetadata()
+        metadata:
+          history ?? (await document.backend.getMetadata()),
+        effects: history?.effects,
+        message: history?.message
       }
     };
     await document.panel.webview.postMessage(message);
+  }
+
+  private async applyHistory(
+    document: PatternEditableDocument,
+    direction: PatternHistoryDirection
+  ): Promise<void> {
+    try {
+      const result =
+        direction === "undo"
+          ? await document.backend.undo()
+          : await document.backend.redo();
+
+      await this.postDocumentState(
+        document,
+        direction === "undo" ? "undone" : "redone",
+        result
+      );
+    } catch (error) {
+      this.output.error(
+        `[history:${direction}] failed`,
+        error
+      );
+      throw error;
+    }
   }
 }
 

@@ -37,6 +37,7 @@ import {
 } from "../pattern-domain/patternTableBinding";
 import type {
   PatternDocumentClient,
+  PatternHistoryDirection,
   PatternMetadata,
   PatternMutationOperation,
   PatternRenderRow
@@ -88,6 +89,8 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const viewportRef = useRef<LogicalViewport | null>(null);
   const revisionRef = useRef(0);
   const mutationPendingRef = useRef(false);
+  const historyPendingRef = useRef(false);
+  const historyEventVersionRef = useRef(0);
   const [metadata, setMetadata] =
     useState<PatternMetadata | null>(null);
   const [tableAdapter, setTableAdapter] =
@@ -95,9 +98,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const [state, setState] =
     useState<LogicalViewportState>(INITIAL_STATE);
   const [isDirty, setIsDirty] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [actionMessage, setActionMessage] = useState(
-    "双击可编辑；右键可插入或删除；Ctrl/Cmd+V 可粘贴。"
+    "双击可编辑；右键可插入或删除；Ctrl/Cmd+A/C/V 可全选、复制和粘贴。"
   );
   const [contextMenu, setContextMenu] =
     useState<PatternContextMenuState | null>(null);
@@ -114,6 +119,8 @@ export function usePatternViewport(client: PatternDocumentClient) {
 
         revisionRef.current = nextMetadata.revision;
         setIsDirty(nextMetadata.isDirty);
+        setCanUndo(nextMetadata.canUndo);
+        setCanRedo(nextMetadata.canRedo);
         setMetadata(nextMetadata);
         setState(current => ({
           ...current,
@@ -195,10 +202,19 @@ export function usePatternViewport(client: PatternDocumentClient) {
     return client.onDidChangeDocumentState?.(event => {
       revisionRef.current = event.metadata.revision;
       setIsDirty(event.metadata.isDirty);
+      setCanUndo(event.metadata.canUndo);
+      setCanRedo(event.metadata.canRedo);
 
       if (event.action === "saved") {
         setActionMessage("已保存到磁盘。");
         return;
+      }
+
+      if (
+        event.action === "undone" ||
+        event.action === "redone"
+      ) {
+        historyEventVersionRef.current += 1;
       }
 
       const viewport = viewportRef.current;
@@ -213,10 +229,18 @@ export function usePatternViewport(client: PatternDocumentClient) {
         .replaceDataset({
           totalVectors: event.metadata.totalVectors,
           revision: event.metadata.revision,
+          effects: event.effects,
           snapshot
         })
         .then(() => {
-          setActionMessage("已从磁盘恢复。");
+          setActionMessage(
+            event.message ??
+              (event.action === "reverted"
+                ? "已从磁盘恢复。"
+                : event.action === "undone"
+                  ? "已撤销上一项操作。"
+                  : "已重做上一项操作。")
+          );
         })
         .catch(error => {
           console.error(
@@ -240,7 +264,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
     ) => {
       const viewport = viewportRef.current;
 
-      if (!viewport || mutationPendingRef.current) {
+      if (
+        !viewport ||
+        mutationPendingRef.current ||
+        historyPendingRef.current
+      ) {
         if (options.optimisticPreviousRow) {
           viewport?.restoreOptimisticRow(
             options.optimisticPreviousRow
@@ -308,6 +336,8 @@ export function usePatternViewport(client: PatternDocumentClient) {
         }
 
         setIsDirty(response.isDirty);
+        setCanUndo(response.canUndo);
+        setCanRedo(response.canRedo);
         setActionMessage(response.message);
       } catch (error) {
         if (options.optimisticPreviousRow) {
@@ -368,6 +398,60 @@ export function usePatternViewport(client: PatternDocumentClient) {
     []
   );
 
+  const runHistory = useCallback(
+    async (direction: PatternHistoryDirection) => {
+      if (
+        mutationPendingRef.current ||
+        historyPendingRef.current
+      ) {
+        setActionMessage("上一项修改仍在处理，请稍后重试。");
+        return;
+      }
+
+      historyPendingRef.current = true;
+      setContextMenu(null);
+      setIsMutating(true);
+      const eventVersion =
+        historyEventVersionRef.current;
+
+      try {
+        const nextMetadata =
+          await client.runHistory(direction);
+        setCanUndo(nextMetadata.canUndo);
+        setCanRedo(nextMetadata.canRedo);
+        setIsDirty(nextMetadata.isDirty);
+
+        /*
+         * 有真实历史变化时，Extension 会先发送 documentState，staged
+         * replacement 的 finally 负责结束 loading。若没有历史项，则不会
+         * 有事件，这里直接恢复按钮状态。
+         */
+        if (
+          historyEventVersionRef.current === eventVersion
+        ) {
+          setActionMessage(
+            direction === "undo"
+              ? "没有可撤销的操作。"
+              : "没有可重做的操作。"
+          );
+          setIsMutating(false);
+        }
+      } catch (error) {
+        console.error(
+          `[Pattern Editor Lite] ${direction} failed`,
+          error
+        );
+        setActionMessage(
+          `${direction === "undo" ? "撤销" : "重做"}失败：${toErrorMessage(error)}`
+        );
+        setIsMutating(false);
+      } finally {
+        historyPendingRef.current = false;
+      }
+    },
+    [client]
+  );
+
   const handleSurfaceContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -420,9 +504,13 @@ export function usePatternViewport(client: PatternDocumentClient) {
     ready: metadata !== null && viewportRef.current !== null,
     isDirty,
     isMutating,
+    canUndo,
+    canRedo,
     actionMessage,
     contextMenu,
     goToVectorIndex,
+    undo: () => runHistory("undo"),
+    redo: () => runHistory("redo"),
     insertRows,
     deleteSelectedRows,
     closeContextMenu: () => setContextMenu(null),

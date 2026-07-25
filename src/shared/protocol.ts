@@ -6,8 +6,8 @@
  * 可以跳过：Webview 请求配对消息
  *
  * 窗口读取与写事务共用 rowKey/revision：前端只回传稳定身份，所有新增、
- * 删除、更新和 Paste 都由后端在一个 applyMutation 边界内提交。本版仍不
- * 提前定义 history、Cycle 重算或 Annotation。
+ * 删除、更新和 Paste 都由后端在一个 applyMutation 边界内提交。Undo/Redo
+ * 与写事务分开，由 VS Code Custom Editor 历史栈触发后端会话历史。
  */
 
 export const SIGNAL_IDS = [
@@ -43,6 +43,8 @@ export type PatternMetadata = {
   totalVectors: number;
   revision: number;
   isDirty: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
 };
 
 export type PatternWindowRequest = {
@@ -132,12 +134,23 @@ export type PatternMutationResponse = PatternMetadata & {
   message: string;
 };
 
+export type PatternHistoryDirection = "undo" | "redo";
+
+export type PatternHistoryResponse = PatternMetadata & {
+  previousRevision: number;
+  effects: PatternMutationEffect[];
+  message: string;
+};
+
 export interface PatternDocumentClient {
   getMetadata(): Promise<PatternMetadata>;
   getWindow(request: PatternWindowRequest): Promise<PatternWindowResponse>;
   applyMutation(
     request: PatternMutationRequest
   ): Promise<PatternMutationResponse>;
+  runHistory(
+    direction: PatternHistoryDirection
+  ): Promise<PatternMetadata>;
   onDidChangeDocumentState?(
     listener: (event: PatternDocumentStateEvent) => void
   ): () => void;
@@ -145,25 +158,30 @@ export interface PatternDocumentClient {
 }
 
 export type PatternDocumentStateEvent = {
-  action: "saved" | "reverted";
+  action: "saved" | "reverted" | "undone" | "redone";
   metadata: PatternMetadata;
+  effects?: PatternMutationEffect[];
+  message?: string;
 };
 
 export type PatternCommand =
   | "getMetadata"
   | "getWindow"
-  | "applyMutation";
+  | "applyMutation"
+  | "runHistory";
 
 export type PatternRequestPayloadMap = {
   getMetadata: undefined;
   getWindow: PatternWindowRequest;
   applyMutation: PatternMutationRequest;
+  runHistory: PatternHistoryDirection;
 };
 
 export type PatternResponsePayloadMap = {
   getMetadata: PatternMetadata;
   getWindow: PatternWindowResponse;
   applyMutation: PatternMutationResponse;
+  runHistory: PatternMetadata;
 };
 
 export type WebviewRequestMessage = {
