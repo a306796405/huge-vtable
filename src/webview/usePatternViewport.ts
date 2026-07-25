@@ -25,16 +25,18 @@ import {
   type LogicalViewportState
 } from "../core/logicalViewport";
 import {
-  createVTableAdapter,
-  type PatternCellEditEvent,
-  type PatternContextMenuEvent,
-  type PatternPasteEvent,
-  type PatternTableAdapter,
-  type VTableListTableInstance
+  type TableCellEditEvent,
+  type TableContextMenuEvent,
+  type TablePasteEvent
 } from "../core/vtableAdapter";
+import {
+  replacePatternCellValue,
+  toPatternEditableColumnId,
+  toPatternEditableColumnIds,
+  type PatternTableAdapter
+} from "../pattern-domain/patternTableBinding";
 import type {
   PatternDocumentClient,
-  PatternEditableColumnId,
   PatternMetadata,
   PatternMutationOperation,
   PatternRenderRow
@@ -59,7 +61,7 @@ export type PatternTableBindings = {
   spacerRef: RefObject<HTMLDivElement>;
   interactionRef: RefObject<HTMLDivElement>;
   handleTableReady(
-    table: VTableListTableInstance,
+    table: PatternTableAdapter,
     isInitial: boolean
   ): void;
   handleSurfaceContextMenu(
@@ -352,8 +354,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
   }, [runMutation, tableAdapter]);
 
   const handleTableReady = useCallback(
-    (table: VTableListTableInstance) => {
-      const adapter = createVTableAdapter(table);
+    (adapter: PatternTableAdapter) => {
       setTableAdapter(adapter);
     },
     []
@@ -436,19 +437,24 @@ export function usePatternViewport(client: PatternDocumentClient) {
 }
 
 function handleCellEdit(
-  event: PatternCellEditEvent,
+  event: TableCellEditEvent<PatternRenderRow>,
   runMutation: (
     operation: PatternMutationOperation,
     options?: MutationOptions
   ) => Promise<void>
 ): void {
-  if (event.rawValue === event.changedValue) {
+  const columnId = toPatternEditableColumnId(event.field);
+
+  if (
+    !columnId ||
+    event.rawValue === event.changedValue
+  ) {
     return;
   }
 
-  const previousRow = replaceCellValue(
+  const previousRow = replacePatternCellValue(
     event.record,
-    event.columnId,
+    columnId,
     event.rawValue
   );
 
@@ -458,7 +464,7 @@ function handleCellEdit(
       changes: [
         {
           rowKey: event.record.rowKey,
-          columnId: event.columnId,
+          columnId,
           value: event.changedValue
         }
       ]
@@ -471,7 +477,7 @@ function handleCellEdit(
 }
 
 function handlePaste(
-  event: PatternPasteEvent,
+  event: TablePasteEvent<PatternRenderRow>,
   table: PatternTableAdapter,
   runMutation: (
     operation: PatternMutationOperation,
@@ -481,11 +487,12 @@ function handlePaste(
 ): void {
   try {
     const values = parseClipboardTsv(event.clipboardText);
-    const columns = table.getEditableColumnIds(
+    const fields = table.getColumnFields(
       event.startCol,
       values[0].length,
       event.startTableRow
     );
+    const columns = toPatternEditableColumnIds(fields);
 
     if (!columns) {
       throw new Error(
@@ -505,7 +512,7 @@ function handlePaste(
 }
 
 function toContextMenuState(
-  event: PatternContextMenuEvent
+  event: TableContextMenuEvent<PatternRenderRow>
 ): PatternContextMenuState {
   return {
     clientX: event.clientX,
@@ -514,28 +521,6 @@ function toContextMenuState(
     selectedRowKeys: [
       ...new Set(event.selectedRows.map(row => row.rowKey))
     ]
-  };
-}
-
-function replaceCellValue(
-  row: PatternRenderRow,
-  columnId: PatternEditableColumnId,
-  value: string
-): PatternRenderRow {
-  if (columnId === "instruction") {
-    return { ...row, instruction: value };
-  }
-
-  if (columnId === "comment") {
-    return { ...row, comment: value };
-  }
-
-  return {
-    ...row,
-    signalValues: {
-      ...row.signalValues,
-      [columnId]: value
-    }
   };
 }
 

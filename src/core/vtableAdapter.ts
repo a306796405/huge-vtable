@@ -2,7 +2,7 @@
  * 阅读等级：B 接口必读
  * 是否迁移：是
  * 前置阅读：core/logicalViewportMath.ts
- * 建议只关注：PatternTableAdapter 接口
+ * 建议只关注：VTableAdapter 接口
  * 可以跳过：VTable tableRow 与 recordIndex 的转换
  *
  * 这是项目中唯一允许接触 VTable imperative API 的文件。即使将来 VTable
@@ -10,13 +10,10 @@
  */
 
 import type { ListTable } from "@visactor/vtable";
-import {
-  isPatternEditableColumnId,
-  type PatternEditableColumnId,
-  type PatternRenderRow
-} from "../shared/protocol";
 
 export type VTableListTableInstance = ListTable;
+export type TableRow = { rowKey: string };
+export type TableField = string | readonly string[];
 
 /**
  * 横向滚动条使用 always 模式，会覆盖 Canvas 底部而不是扩大 DOM 高度。
@@ -24,10 +21,17 @@ export type VTableListTableInstance = ListTable;
  */
 export const VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT = 12;
 export const VTABLE_HEADER_ROW_HEIGHT = 32;
-export const PATTERN_HEADER_ROW_COUNT = 2;
 
-export interface PatternTableAdapter {
-  setRecords(rows: PatternRenderRow[]): void;
+export type VTableAdapterOptions = {
+  /**
+   * 某些分组表头版本的冻结高度测量会偏小。调用方可按自己的列配置提供
+   * 最小表头高度；adapter 只负责测量，不知道 Pattern 有几层表头。
+   */
+  minimumHeaderHeightPx?: number;
+};
+
+export interface VTableAdapter<Row extends TableRow> {
+  setRecords(rows: Row[]): void;
   setScrollTop(scrollTop: number): void;
   getScrollTop(): number;
   setScrollLeft(scrollLeft: number): void;
@@ -38,45 +42,46 @@ export interface PatternTableAdapter {
   getVisibleRecordRange(): { start: number; end: number } | null;
   getElement(): HTMLElement;
   observeCellEdits(
-    listener: (event: PatternCellEditEvent) => void
+    listener: (event: TableCellEditEvent<Row>) => void
   ): () => void;
   observeContextMenu(
-    listener: (event: PatternContextMenuEvent) => void
+    listener: (event: TableContextMenuEvent<Row>) => void
   ): () => void;
   observePaste(
-    listener: (event: PatternPasteEvent) => void
+    listener: (event: TablePasteEvent<Row>) => void
   ): () => void;
-  getEditableColumnIds(
+  getColumnFields(
     startCol: number,
     columnCount: number,
     tableRow: number
-  ): PatternEditableColumnId[] | null;
+  ): TableField[] | null;
 }
 
-export type PatternCellEditEvent = {
-  record: PatternRenderRow;
-  columnId: PatternEditableColumnId;
+export type TableCellEditEvent<Row extends TableRow> = {
+  record: Row;
+  field: TableField | null;
   rawValue: string;
   changedValue: string;
 };
 
-export type PatternContextMenuEvent = {
+export type TableContextMenuEvent<Row extends TableRow> = {
   clientX: number;
   clientY: number;
-  targetRow: PatternRenderRow;
-  selectedRows: PatternRenderRow[];
+  targetRow: Row;
+  selectedRows: Row[];
 };
 
-export type PatternPasteEvent = {
+export type TablePasteEvent<Row extends TableRow> = {
   startCol: number;
   startTableRow: number;
-  startRow: PatternRenderRow;
+  startRow: Row;
   clipboardText: string;
 };
 
-export function createVTableAdapter(
-  table: VTableListTableInstance
-): PatternTableAdapter {
+export function createVTableAdapter<Row extends TableRow>(
+  table: VTableListTableInstance,
+  options: VTableAdapterOptions = {}
+): VTableAdapter<Row> {
   return {
     setRecords(rows) {
       table.setRecords(rows, { sortState: null });
@@ -124,7 +129,7 @@ export function createVTableAdapter(
       const topFrozenHeight = Math.max(
         table.getFrozenRowsHeight(),
         columnHeaderHeight,
-        PATTERN_HEADER_ROW_COUNT * VTABLE_HEADER_ROW_HEIGHT
+        options.minimumHeaderHeightPx ?? 0
       );
       const bodyTop =
         tableTop + topFrozenHeight;
@@ -177,17 +182,17 @@ export function createVTableAdapter(
           const record = table.getCellOriginRecord(
             event.col,
             event.row
-          ) as PatternRenderRow | undefined;
-          const columnId = getEditableColumnId(
+          ) as Row | undefined;
+          const field = getColumnField(
             table,
             event.col,
             event.row
           );
 
-          if (record && columnId) {
+          if (record) {
             listener({
               record,
-              columnId,
+              field,
               rawValue: toCellString(event.rawValue),
               changedValue: toCellString(event.changedValue)
             });
@@ -209,7 +214,7 @@ export function createVTableAdapter(
         const targetRow = table.getCellOriginRecord(
           cell.col,
           cell.row
-        ) as PatternRenderRow | undefined;
+        ) as Row | undefined;
 
         /*
          * VTable 的 `contextmenu_cell` 依赖 VRender 的 rightdown 事件；
@@ -225,7 +230,7 @@ export function createVTableAdapter(
           cellInsideRange(cell.col, cell.row, range)
         );
         const selectedRows = targetInsideSelection
-          ? collectSelectedRows(table, ranges, cell.col)
+          ? collectSelectedRows<Row>(table, ranges, cell.col)
           : [targetRow];
 
         listener({
@@ -266,7 +271,7 @@ export function createVTableAdapter(
         const startRow = table.getCellOriginRecord(
           startCol,
           startTableRow
-        ) as PatternRenderRow | undefined;
+        ) as Row | undefined;
 
         if (!startRow) {
           return;
@@ -286,41 +291,47 @@ export function createVTableAdapter(
       return () =>
         element.removeEventListener("paste", handlePaste);
     },
-    getEditableColumnIds(startCol, columnCount, tableRow) {
-      const columns: PatternEditableColumnId[] = [];
+    getColumnFields(startCol, columnCount, tableRow) {
+      const fields: TableField[] = [];
 
       for (let index = 0; index < columnCount; index += 1) {
-        const columnId = getEditableColumnId(
+        const field = getColumnField(
           table,
           startCol + index,
           tableRow
         );
 
-        if (!columnId) {
+        if (!field) {
           return null;
         }
 
-        columns.push(columnId);
+        fields.push(field);
       }
 
-      return columns;
+      return fields;
     }
   };
 }
 
-function getEditableColumnId(
+function getColumnField(
   table: VTableListTableInstance,
   col: number,
   row: number
-): PatternEditableColumnId | null {
+): TableField | null {
   const field = table.getHeaderField(col, row);
-  const candidate = Array.isArray(field)
-    ? field.at(-1)
-    : field;
 
-  return isPatternEditableColumnId(candidate)
-    ? candidate
-    : null;
+  if (typeof field === "string") {
+    return field;
+  }
+
+  if (
+    Array.isArray(field) &&
+    field.every(item => typeof item === "string")
+  ) {
+    return field;
+  }
+
+  return null;
 }
 
 function cellInsideRange(
@@ -339,12 +350,12 @@ function cellInsideRange(
   );
 }
 
-function collectSelectedRows(
+function collectSelectedRows<Row extends TableRow>(
   table: VTableListTableInstance,
   ranges: ReturnType<VTableListTableInstance["getSelectedCellRanges"]>,
   fallbackCol: number
-): PatternRenderRow[] {
-  const rows = new Map<string, PatternRenderRow>();
+): Row[] {
+  const rows = new Map<string, Row>();
 
   for (const range of ranges) {
     const startRow = Math.min(range.start.row, range.end.row);
@@ -361,7 +372,7 @@ function collectSelectedRows(
       const record = table.getCellOriginRecord(
         col,
         row
-      ) as PatternRenderRow | undefined;
+      ) as Row | undefined;
 
       if (record) {
         rows.set(record.rowKey, record);

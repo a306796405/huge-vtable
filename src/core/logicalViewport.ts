@@ -18,7 +18,7 @@ import {
   type PatternRenderRow,
   type PatternWindowResponse
 } from "../shared/protocol";
-import type { PatternTableAdapter } from "./vtableAdapter";
+import type { VTableAdapter } from "./vtableAdapter";
 import {
   clampGoToVectorIndex,
   clampNumber,
@@ -55,7 +55,7 @@ export type LogicalViewportState = {
 
 export type LogicalViewportOptions = {
   client: PatternDocumentClient;
-  table: PatternTableAdapter;
+  table: VTableAdapter<PatternRenderRow>;
   scrollElement: HTMLDivElement;
   spacerElement: HTMLDivElement;
   interactionElement: HTMLDivElement;

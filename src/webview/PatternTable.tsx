@@ -1,165 +1,65 @@
 /**
  * 阅读等级：A 业务必读
  * 是否迁移：按真实 Pattern 列调整
- * 前置阅读：usePatternViewport.ts
- * 建议只关注：列定义和三层 Surface
- * 可以跳过：React-VTable memo 薄封装
+ * 前置阅读：pattern-domain/patternTableBinding.ts
+ * 建议只关注：Pattern 配置如何注入公共 Surface
+ * 可以跳过：公共 Surface 内部实现
  */
 
-import { memo, useMemo } from "react";
-import { ListTable } from "@visactor/react-vtable";
-import { InputEditor } from "@visactor/vtable-editors";
-import type {
-  ColumnsDefine,
-  ListTableConstructorOptions
-} from "@visactor/vtable";
-import { SIGNAL_IDS } from "../shared/protocol";
+import { useCallback, useMemo } from "react";
 import {
+  createVTableAdapter,
   VTABLE_HEADER_ROW_HEIGHT,
-  VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT,
   type VTableListTableInstance
 } from "../core/vtableAdapter";
+import {
+  createDocumentTableOption,
+  DocumentTableSurface
+} from "../editor-shell/DocumentTableSurface";
+import {
+  createPatternColumns,
+  type PatternTableAdapter
+} from "../pattern-domain/patternTableBinding";
+import type { PatternRenderRow } from "../shared/protocol";
 import type { PatternTableBindings } from "./usePatternViewport";
+
+const PATTERN_HEADER_ROW_COUNT = 2;
 
 export function PatternTable({
   bindings
 }: {
   bindings: PatternTableBindings;
 }) {
-  const option = useMemo(createTableOption, []);
-
-  return (
-    <section className="table-shell" aria-label="Pattern vectors">
-      <div
-        ref={bindings.logicalScrollRef}
-        className="logical-scroll"
-        aria-hidden="true"
-      >
-        <div
-          ref={bindings.spacerRef}
-          className="virtual-spacer"
-        />
-      </div>
-      <div
-        ref={bindings.interactionRef}
-        className="table-overlay"
-        tabIndex={0}
-        aria-label="Pattern vector table"
-        onContextMenu={bindings.handleSurfaceContextMenu}
-      >
-        <MemoVTable
-          option={option}
-          onReady={bindings.handleTableReady}
-        />
-      </div>
-    </section>
+  const option = useMemo(
+    () => createDocumentTableOption(createPatternColumns()),
+    []
   );
-}
+  const handleReady = useCallback(
+    (
+      table: VTableListTableInstance,
+      isInitial: boolean
+    ) => {
+      const adapter = createVTableAdapter<PatternRenderRow>(
+        table,
+        {
+          minimumHeaderHeightPx:
+            PATTERN_HEADER_ROW_COUNT *
+            VTABLE_HEADER_ROW_HEIGHT
+        }
+      );
+      bindings.handleTableReady(adapter, isInitial);
+    },
+    [bindings]
+  );
 
-function createTableOption(): ListTableConstructorOptions {
-  return {
-    records: [],
-    columns: createColumns(),
-    widthMode: "standard",
-    defaultRowHeight: 28,
-    defaultHeaderRowHeight: VTABLE_HEADER_ROW_HEIGHT,
-    frozenColCount: 4,
-    autoFillWidth: false,
-    overscrollBehavior: "none",
-    editCellTrigger: "doubleclick",
-    keyboardOptions: {
-      copySelected: true,
-      pasteValueToCell: false,
-      showCopyCellBorder: true
-    },
-    hover: {
-      highlightMode: "row"
-    },
-    theme: {
-      headerStyle: {
-        bgColor: "#eef2f6",
-        color: "#263247",
-        fontSize: 12,
-        fontWeight: 600
-      },
-      bodyStyle: {
-        color: "#263247",
-        fontSize: 12
-      },
-      scrollStyle: {
-        visible: "always",
-        horizontalVisible: "always",
-        verticalVisible: "none",
-        barToSide: true,
-        hoverOn: false,
-        width: VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT,
-        scrollRailColor: "rgba(226, 232, 240, 0.72)",
-        scrollSliderColor: "rgba(100, 116, 139, 0.82)",
-        scrollSliderCornerRadius: 6
-      }
-    }
-  };
-}
-
-function createColumns(): ColumnsDefine {
-  return [
-    {
-      field: "vectorIndex",
-      title: "Vector",
-      width: 92
-    },
-    {
-      field: "cycleText",
-      title: "Cycle",
-      width: 110
-    },
-    {
-      field: "instruction",
-      title: "Instruction",
-      width: 160,
-      editor: new InputEditor()
-    },
-    {
-      field: "comment",
-      title: "Comment",
-      width: 170,
-      editor: new InputEditor()
-    },
-    {
-      title: "Signals",
-      columns: SIGNAL_IDS.map(signalId => ({
-        key: `signal:${signalId}`,
-        field: ["signalValues", signalId],
-        title: signalId,
-        width: 76,
-        editor: new InputEditor()
-      }))
-    }
-  ];
-}
-
-const MemoVTable = memo(function MemoVTable({
-  option,
-  onReady
-}: {
-  option: ListTableConstructorOptions;
-  onReady(
-    table: VTableListTableInstance,
-    isInitial: boolean
-  ): void;
-}) {
   return (
-    <ListTable
+    <DocumentTableSurface
       option={option}
-      className="vtable-instance"
-      width="100%"
-      height="100%"
-      onReady={(table, isInitial) =>
-        onReady(
-          table as VTableListTableInstance,
-          isInitial
-        )
-      }
+      logicalScrollRef={bindings.logicalScrollRef}
+      spacerRef={bindings.spacerRef}
+      interactionRef={bindings.interactionRef}
+      onReady={handleReady}
+      onContextMenu={bindings.handleSurfaceContextMenu}
     />
   );
-});
+}
