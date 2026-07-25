@@ -28,6 +28,11 @@ export type VTableAdapterOptions = {
    * 最小表头高度；adapter 只负责测量，不知道 Pattern 有几层表头。
    */
   minimumHeaderHeightPx?: number;
+  /**
+   * VTable Canvas 外层的可聚焦 Surface。VS Code Webview 中系统剪贴板事件
+   * 会派发给当前焦点元素，因此 adapter 用它判断事件是否属于这张表。
+   */
+  interactionElement?: HTMLElement;
 };
 
 export interface VTableAdapter<Row extends TableRow> {
@@ -254,6 +259,15 @@ export function createVTableAdapter<Row extends TableRow>(
     observePaste(listener) {
       const element = table.getElement();
       const handlePaste = (event: ClipboardEvent) => {
+        if (
+          !ownsClipboardEvent(
+            options.interactionElement ?? element,
+            event
+          )
+        ) {
+          return;
+        }
+
         const range = table.getSelectedCellRanges().at(-1);
 
         if (!range || !event.clipboardData) {
@@ -286,10 +300,38 @@ export function createVTableAdapter<Row extends TableRow>(
             event.clipboardData.getData("text/plain")
         });
       };
+      const handleCopy = (event: ClipboardEvent) => {
+        if (
+          !event.clipboardData ||
+          !ownsClipboardEvent(
+            options.interactionElement ?? element,
+            event
+          )
+        ) {
+          return;
+        }
 
-      element.addEventListener("paste", handlePaste);
-      return () =>
-        element.removeEventListener("paste", handlePaste);
+        /*
+         * VTable 默认复制路径依赖异步 Clipboard API。VS Code Webview 的
+         * clipboard 权限与普通浏览器不同，因此在系统 copy 事件中使用
+         * VTable 的公开 getCopyValue()，同步写入事件自带的 clipboardData。
+         */
+        const copyValue = table.getCopyValue();
+
+        if (typeof copyValue !== "string") {
+          return;
+        }
+
+        event.preventDefault();
+        event.clipboardData.setData("text/plain", copyValue);
+      };
+
+      document.addEventListener("copy", handleCopy, true);
+      document.addEventListener("paste", handlePaste, true);
+      return () => {
+        document.removeEventListener("copy", handleCopy, true);
+        document.removeEventListener("paste", handlePaste, true);
+      };
     },
     getColumnFields(startCol, columnCount, tableRow) {
       const fields: TableField[] = [];
@@ -393,4 +435,32 @@ function toCellString(value: unknown): string {
   return value === null || value === undefined
     ? ""
     : String(value);
+}
+
+function ownsClipboardEvent(
+  interactionElement: HTMLElement,
+  event: ClipboardEvent
+): boolean {
+  if (isTextEditingTarget(event.target)) {
+    return false;
+  }
+
+  const activeElement = document.activeElement;
+
+  return (
+    activeElement === interactionElement ||
+    (activeElement instanceof Node &&
+      interactionElement.contains(activeElement))
+  );
+}
+
+function isTextEditingTarget(
+  target: EventTarget | null
+): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement &&
+      target.isContentEditable)
+  );
 }

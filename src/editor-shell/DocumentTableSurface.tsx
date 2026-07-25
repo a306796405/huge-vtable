@@ -11,6 +11,7 @@
 
 import {
   memo,
+  type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject
 } from "react";
@@ -45,6 +46,16 @@ export function DocumentTableSurface({
   onReady,
   onContextMenu
 }: DocumentTableSurfaceProps) {
+  const focusSurface = (
+    event: ReactPointerEvent<HTMLDivElement>
+  ) => {
+    if (isTextEditingTarget(event.target)) {
+      return;
+    }
+
+    event.currentTarget.focus({ preventScroll: true });
+  };
+
   return (
     <section className="table-shell" aria-label="Document table">
       <div
@@ -59,11 +70,23 @@ export function DocumentTableSurface({
         className="table-overlay"
         tabIndex={0}
         aria-label="Document data table"
+        onPointerDownCapture={focusSurface}
         onContextMenu={onContextMenu}
       >
         <MemoVTable option={option} onReady={onReady} />
       </div>
     </section>
+  );
+}
+
+function isTextEditingTarget(
+  target: EventTarget | null
+): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement &&
+      target.isContentEditable)
   );
 }
 
@@ -81,7 +104,12 @@ export function createDocumentTableOption(
     overscrollBehavior: "none",
     editCellTrigger: "doubleclick",
     keyboardOptions: {
-      copySelected: true,
+      /*
+       * VTable 当前只持有一个窗口，因此 Ctrl/Cmd+A 不会选择或物化亿级
+       * 全量数据。复制由 adapter 的同步 ClipboardEvent 路径负责。
+       */
+      selectAllOnCtrlA: true,
+      copySelected: false,
       pasteValueToCell: false,
       showCopyCellBorder: true
     },

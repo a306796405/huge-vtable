@@ -44,7 +44,9 @@ export function PatternTable({
         {
           minimumHeaderHeightPx:
             PATTERN_HEADER_ROW_COUNT *
-            VTABLE_HEADER_ROW_HEIGHT
+            VTABLE_HEADER_ROW_HEIGHT,
+          interactionElement:
+            bindings.interactionRef.current ?? undefined
         }
       );
       bindings.handleTableReady(adapter, isInitial);
