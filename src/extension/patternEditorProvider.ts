@@ -17,10 +17,11 @@ import type {
   PatternDocumentStateEvent,
   PatternHistoryDirection,
   PatternHistoryResponse,
+  PatternClientLogEntry,
   PatternMutationRequest,
   PatternRequestError,
   PatternWindowRequest,
-  WebviewRequestMessage
+  WebviewToExtensionMessage
 } from "../shared/protocol";
 import type { PatternBackend } from "./patternBackend";
 
@@ -105,7 +106,7 @@ export class PatternEditorProvider
         void this.handleMessage(
           document,
           panel.webview,
-          rawMessage as WebviewRequestMessage
+          rawMessage as WebviewToExtensionMessage
         );
       });
     panel.onDidDispose(() => {
@@ -206,8 +207,13 @@ export class PatternEditorProvider
   private async handleMessage(
     document: PatternEditableDocument,
     webview: vscode.Webview,
-    message: WebviewRequestMessage
+    message: WebviewToExtensionMessage
   ): Promise<void> {
+    if (message?.kind === "clientLog") {
+      this.writeClientLog(message.entry);
+      return;
+    }
+
     if (!message || message.kind !== "request") {
       return;
     }
@@ -319,6 +325,29 @@ export class PatternEditorProvider
     }
   }
 
+  private writeClientLog(entry: PatternClientLogEntry): void {
+    const errorId = sanitizeLogValue(entry.errorId, 80);
+    const command = sanitizeLogValue(entry.command, 80);
+    const phase = sanitizeLogValue(entry.phase, 80);
+    const code = sanitizeLogValue(entry.code, 40);
+    const message = sanitizeLogValue(entry.message, 500);
+    const stack = entry.stack
+      ? `\n${sanitizeLogValue(entry.stack, 2_000)}`
+      : "";
+    const line =
+      `[${errorId}] ${command}/${phase} ${code}` +
+      ` revision=${entry.revision}` +
+      ` window=${entry.windowStartVectorIndex}: ${message}${stack}`;
+
+    if (entry.level === "error") {
+      this.output.error(line);
+    } else if (entry.level === "warn") {
+      this.output.warn(line);
+    } else {
+      this.output.info(line);
+    }
+  }
+
   private async postDocumentState(
     document: PatternEditableDocument,
     action: PatternDocumentStateEvent["action"],
@@ -407,6 +436,15 @@ function toPatternRequestError(
     message,
     currentRevision
   };
+}
+
+function sanitizeLogValue(
+  value: unknown,
+  maximumLength: number
+): string {
+  return String(value)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .slice(0, maximumLength);
 }
 
 async function respond(

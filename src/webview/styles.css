@@ -371,6 +371,19 @@ body {
   color: #4266af;
 }
 
+.status-retry {
+  flex: 0 0 auto;
+  height: 20px;
+  margin-left: auto;
+  border: 1px solid #b54b43;
+  border-radius: 3px;
+  padding: 0 7px;
+  color: #8e2f29;
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .status-bar.has-error,
 .status-bar.has-error .status-detail {
   color: #a3362d;

@@ -22,7 +22,8 @@ import {
 } from "react";
 import {
   LogicalViewport,
-  type LogicalViewportState
+  type LogicalViewportState,
+  type ViewportSnapshot
 } from "../core/logicalViewport";
 import {
   type TableCellEditEvent,
@@ -36,10 +37,12 @@ import {
   type PatternTableAdapter
 } from "../pattern-domain/patternTableBinding";
 import type {
+  PatternClientLogEntry,
   PatternDocumentClient,
   PatternHistoryDirection,
   PatternMetadata,
   PatternMutationOperation,
+  PatternRequestError,
   PatternRenderRow
 } from "../shared/protocol";
 import { parseClipboardTsv } from "./clipboardTsv";
@@ -82,15 +85,35 @@ type MutationOptions = {
   preferLocalCacheUpdate?: boolean;
 };
 
+type ClientIssue = {
+  command: string;
+  phase: string;
+  error: unknown;
+  level?: PatternClientLogEntry["level"];
+  errorId?: string;
+};
+
+type AuthoritativeSyncOptions = {
+  command: string;
+  errorId: string;
+  snapshot?: ViewportSnapshot;
+};
+
 export function usePatternViewport(client: PatternDocumentClient) {
   const logicalScrollRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
   const interactionRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<LogicalViewport | null>(null);
   const revisionRef = useRef(0);
+  const windowStartRef = useRef(0);
   const mutationPendingRef = useRef(false);
   const historyPendingRef = useRef(false);
   const historyEventVersionRef = useRef(0);
+  const recoveryPromiseRef = useRef<Promise<void> | null>(
+    null
+  );
+  const syncBlockedRef = useRef(false);
+  const nextErrorIdRef = useRef(1);
   const [metadata, setMetadata] =
     useState<PatternMetadata | null>(null);
   const [tableAdapter, setTableAdapter] =
@@ -101,11 +124,130 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+  const [isSyncBlocked, setIsSyncBlocked] =
+    useState(false);
   const [actionMessage, setActionMessage] = useState(
     "双击可编辑；右键可插入或删除；Ctrl/Cmd+A/C/V 可全选、复制和粘贴。"
   );
   const [contextMenu, setContextMenu] =
     useState<PatternContextMenuState | null>(null);
+
+  const applyMetadata = useCallback(
+    (nextMetadata: PatternMetadata) => {
+      revisionRef.current = nextMetadata.revision;
+      /*
+       * metadata state 只负责首次创建 viewport。后续 revision 由 runtime
+       * 原地推进，不能替换这个对象，否则 React effect 会销毁并重建表格，
+       * 造成闪动和滚动位置丢失。
+       */
+      setMetadata(current => current ?? nextMetadata);
+      setIsDirty(nextMetadata.isDirty);
+      setCanUndo(nextMetadata.canUndo);
+      setCanRedo(nextMetadata.canRedo);
+    },
+    []
+  );
+
+  const reportClientIssue = useCallback(
+    (issue: ClientIssue): string => {
+      const errorId =
+        issue.errorId ??
+        `PE-${Date.now().toString(36)}-${nextErrorIdRef.current++}`;
+      const detail = getRequestErrorDetail(issue.error);
+
+      client.reportClientLog?.({
+        errorId,
+        level: issue.level ?? "error",
+        command: issue.command,
+        phase: issue.phase,
+        revision: revisionRef.current,
+        windowStartVectorIndex: windowStartRef.current,
+        code: detail?.code ?? "CLIENT_ERROR",
+        message: toErrorMessage(issue.error),
+        stack:
+          issue.error instanceof Error
+            ? issue.error.stack
+            : undefined
+      });
+
+      return errorId;
+    },
+    [client]
+  );
+
+  const syncAuthoritative = useCallback(
+    (
+      options: AuthoritativeSyncOptions
+    ): Promise<void> => {
+      const activeRecovery = recoveryPromiseRef.current;
+
+      if (activeRecovery) {
+        return activeRecovery;
+      }
+
+      syncBlockedRef.current = false;
+      setIsSyncBlocked(false);
+      setIsMutating(true);
+
+      const recovery = (async () => {
+        const nextMetadata = await client.getMetadata();
+        const viewport = viewportRef.current;
+
+        if (viewport) {
+          await viewport.replaceDataset({
+            totalVectors: nextMetadata.totalVectors,
+            revision: nextMetadata.revision,
+            snapshot:
+              options.snapshot ??
+              viewport.captureViewportSnapshot()
+          });
+        }
+
+        applyMetadata(nextMetadata);
+        setState(current => ({
+          ...current,
+          totalVectors: nextMetadata.totalVectors,
+          revision: nextMetadata.revision,
+          errorMessage: null
+        }));
+        setActionMessage(
+          `已重新同步权威数据（错误 ID：${options.errorId}）。`
+        );
+        client.reportClientLog?.({
+          errorId: options.errorId,
+          level: "info",
+          command: options.command,
+          phase: "authoritativeSync",
+          revision: nextMetadata.revision,
+          windowStartVectorIndex: windowStartRef.current,
+          code: "RECOVERED",
+          message: "Authoritative metadata and viewport synchronized."
+        });
+      })()
+        .catch(error => {
+          syncBlockedRef.current = true;
+          setIsSyncBlocked(true);
+          reportClientIssue({
+            command: options.command,
+            phase: "authoritativeSync",
+            error,
+            errorId: options.errorId
+          });
+          setActionMessage(
+            `重新同步失败，当前画面已保留（错误 ID：${options.errorId}）。`
+          );
+          throw error;
+        })
+        .finally(() => {
+          recoveryPromiseRef.current = null;
+          setIsMutating(false);
+        });
+
+      recoveryPromiseRef.current = recovery;
+      return recovery;
+    },
+    [applyMetadata, client, reportClientIssue]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -117,11 +259,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
           return;
         }
 
-        revisionRef.current = nextMetadata.revision;
-        setIsDirty(nextMetadata.isDirty);
-        setCanUndo(nextMetadata.canUndo);
-        setCanRedo(nextMetadata.canRedo);
-        setMetadata(nextMetadata);
+        applyMetadata(nextMetadata);
         setState(current => ({
           ...current,
           totalVectors: nextMetadata.totalVectors,
@@ -131,11 +269,21 @@ export function usePatternViewport(client: PatternDocumentClient) {
       })
       .catch(error => {
         if (!cancelled) {
+          const errorId = reportClientIssue({
+            command: "getMetadata",
+            phase: "initialLoad",
+            error
+          });
+          syncBlockedRef.current = true;
+          setIsSyncBlocked(true);
           setState(current => ({
             ...current,
             isLoading: false,
             errorMessage: toErrorMessage(error)
           }));
+          setActionMessage(
+            `文档初始化失败（错误 ID：${errorId}）。`
+          );
         }
       });
 
@@ -143,7 +291,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
       cancelled = true;
       client.dispose?.();
     };
-  }, [client]);
+  }, [applyMetadata, client, reportClientIssue]);
 
   useEffect(() => {
     const scrollElement = logicalScrollRef.current;
@@ -170,23 +318,36 @@ export function usePatternViewport(client: PatternDocumentClient) {
       revision: metadata.revision,
       onStateChange: nextState => {
         revisionRef.current = nextState.revision;
+        windowStartRef.current =
+          nextState.windowStartVectorIndex;
         setState(nextState);
       },
       onError: error => {
-        console.error(
-          "[Pattern Editor Lite] window read failed",
+        reportClientIssue({
+          command: "getWindow",
+          phase: "viewportRead",
           error
-        );
+        });
       }
     });
 
     viewportRef.current = viewport;
     void viewport.start().catch(error => {
+      const errorId = reportClientIssue({
+        command: "getWindow",
+        phase: "viewportStart",
+        error
+      });
+      syncBlockedRef.current = true;
+      setIsSyncBlocked(true);
       setState(current => ({
         ...current,
         isLoading: false,
         errorMessage: toErrorMessage(error)
       }));
+      setActionMessage(
+        `初始窗口读取失败（错误 ID：${errorId}）。`
+      );
     });
 
     return () => {
@@ -196,14 +357,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
         viewportRef.current = null;
       }
     };
-  }, [client, metadata, tableAdapter]);
+  }, [client, metadata, reportClientIssue, tableAdapter]);
 
   useEffect(() => {
     return client.onDidChangeDocumentState?.(event => {
-      revisionRef.current = event.metadata.revision;
-      setIsDirty(event.metadata.isDirty);
-      setCanUndo(event.metadata.canUndo);
-      setCanRedo(event.metadata.canRedo);
+      applyMetadata(event.metadata);
 
       if (event.action === "saved") {
         setActionMessage("已保存到磁盘。");
@@ -243,19 +401,28 @@ export function usePatternViewport(client: PatternDocumentClient) {
           );
         })
         .catch(error => {
-          console.error(
-            "[Pattern Editor Lite] revert reload failed",
+          const errorId = reportClientIssue({
+            command: event.action,
+            phase: "documentStateApply",
             error
-          );
-          setActionMessage(
-            `恢复显示失败：${toErrorMessage(error)}`
-          );
+          });
+
+          return syncAuthoritative({
+            command: event.action,
+            errorId,
+            snapshot
+          }).catch(() => undefined);
         })
         .finally(() => {
           setIsMutating(false);
         });
     });
-  }, [client]);
+  }, [
+    applyMetadata,
+    client,
+    reportClientIssue,
+    syncAuthoritative
+  ]);
 
   const runMutation = useCallback(
     async (
@@ -267,7 +434,9 @@ export function usePatternViewport(client: PatternDocumentClient) {
       if (
         !viewport ||
         mutationPendingRef.current ||
-        historyPendingRef.current
+        historyPendingRef.current ||
+        recoveryPromiseRef.current ||
+        syncBlockedRef.current
       ) {
         if (options.optimisticPreviousRow) {
           viewport?.restoreOptimisticRow(
@@ -276,9 +445,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
         }
 
         setActionMessage(
-          viewport
-            ? "上一项修改仍在提交，请稍后重试。"
-            : "表格尚未准备完成。"
+          syncBlockedRef.current
+            ? "当前视图需要重新同步后才能继续写入。"
+            : viewport
+              ? "上一项修改仍在提交，请稍后重试。"
+              : "表格尚未准备完成。"
         );
         return;
       }
@@ -288,21 +459,25 @@ export function usePatternViewport(client: PatternDocumentClient) {
       setContextMenu(null);
       const snapshot = viewport.captureViewportSnapshot();
       const baseRevision = revisionRef.current;
+      let responseCommitted = false;
 
       try {
         const response = await client.applyMutation({
           baseRevision,
           operation
         });
+        responseCommitted =
+          response.revision !== response.previousRevision;
 
         /*
          * 后端已经原子提交后，revision 必须立即推进。即使随后本地 Canvas
          * 同步失败，也不能再用旧 revision 发起第二次写操作。
          */
         revisionRef.current = response.revision;
+        applyMetadata(response);
 
         if (
-          response.revision !== response.previousRevision &&
+          responseCommitted &&
           options.preferLocalCacheUpdate &&
           response.updatedRows?.length
         ) {
@@ -313,10 +488,12 @@ export function usePatternViewport(client: PatternDocumentClient) {
               rows: response.updatedRows
             });
           } catch (cacheError) {
-            console.warn(
-              "[Pattern Editor Lite] local cache update failed; staging authoritative window",
-              cacheError
-            );
+            reportClientIssue({
+              command: operation.kind,
+              phase: "localCacheApply",
+              error: cacheError,
+              level: "warn"
+            });
             await viewport.replaceDataset({
               totalVectors: response.totalVectors,
               revision: response.revision,
@@ -324,9 +501,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
               snapshot
             });
           }
-        } else if (
-          response.revision !== response.previousRevision
-        ) {
+        } else if (responseCommitted) {
           await viewport.replaceDataset({
             totalVectors: response.totalVectors,
             revision: response.revision,
@@ -335,28 +510,53 @@ export function usePatternViewport(client: PatternDocumentClient) {
           });
         }
 
-        setIsDirty(response.isDirty);
-        setCanUndo(response.canUndo);
-        setCanRedo(response.canRedo);
         setActionMessage(response.message);
       } catch (error) {
-        if (options.optimisticPreviousRow) {
+        const detail = getRequestErrorDetail(error);
+        const isLocalValidationFailure =
+          !responseCommitted &&
+          detail?.code === "VALIDATION_ERROR";
+
+        if (
+          isLocalValidationFailure &&
+          options.optimisticPreviousRow
+        ) {
           viewport.restoreOptimisticRow(
             options.optimisticPreviousRow
           );
         }
 
-        console.error(
-          `[Pattern Editor Lite] ${operation.kind} failed`,
+        const errorId = reportClientIssue({
+          command: operation.kind,
+          phase: responseCommitted
+            ? "applyCommittedResult"
+            : "execute",
+          level: isLocalValidationFailure ? "warn" : "error",
           error
-        );
-        setActionMessage(`操作失败：${toErrorMessage(error)}`);
+        });
+
+        if (isLocalValidationFailure) {
+          setActionMessage(
+            `操作未提交：${toErrorMessage(error)}（错误 ID：${errorId}）`
+          );
+        } else {
+          await syncAuthoritative({
+            command: operation.kind,
+            errorId,
+            snapshot
+          }).catch(() => undefined);
+        }
       } finally {
         mutationPendingRef.current = false;
         setIsMutating(false);
       }
     },
-    [client]
+    [
+      applyMetadata,
+      client,
+      reportClientIssue,
+      syncAuthoritative
+    ]
   );
 
   useEffect(() => {
@@ -373,7 +573,13 @@ export function usePatternViewport(client: PatternDocumentClient) {
       }
     );
     const stopPaste = tableAdapter.observePaste(event => {
-      handlePaste(event, tableAdapter, runMutation, setActionMessage);
+      handlePaste(
+        event,
+        tableAdapter,
+        runMutation,
+        setActionMessage,
+        reportClientIssue
+      );
     });
 
     return () => {
@@ -381,7 +587,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
       stopContextMenu();
       stopPaste();
     };
-  }, [runMutation, tableAdapter]);
+  }, [reportClientIssue, runMutation, tableAdapter]);
 
   const handleTableReady = useCallback(
     (adapter: PatternTableAdapter) => {
@@ -393,18 +599,37 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const goToVectorIndex = useCallback(
     async (vectorIndex: number) => {
       setContextMenu(null);
-      await viewportRef.current?.goToVectorIndex(vectorIndex);
+      try {
+        await viewportRef.current?.goToVectorIndex(
+          vectorIndex
+        );
+      } catch (error) {
+        const errorId = reportClientIssue({
+          command: "goToVectorIndex",
+          phase: "execute",
+          error
+        });
+        setActionMessage(
+          `定位失败：${toErrorMessage(error)}（错误 ID：${errorId}）`
+        );
+      }
     },
-    []
+    [reportClientIssue]
   );
 
   const runHistory = useCallback(
     async (direction: PatternHistoryDirection) => {
       if (
         mutationPendingRef.current ||
-        historyPendingRef.current
+        historyPendingRef.current ||
+        recoveryPromiseRef.current ||
+        syncBlockedRef.current
       ) {
-        setActionMessage("上一项修改仍在处理，请稍后重试。");
+        setActionMessage(
+          syncBlockedRef.current
+            ? "当前视图需要重新同步后才能执行历史操作。"
+            : "上一项修改仍在处理，请稍后重试。"
+        );
         return;
       }
 
@@ -437,20 +662,44 @@ export function usePatternViewport(client: PatternDocumentClient) {
           setIsMutating(false);
         }
       } catch (error) {
-        console.error(
-          `[Pattern Editor Lite] ${direction} failed`,
+        const errorId = reportClientIssue({
+          command: direction,
+          phase: "execute",
           error
-        );
-        setActionMessage(
-          `${direction === "undo" ? "撤销" : "重做"}失败：${toErrorMessage(error)}`
-        );
+        });
+        const viewport = viewportRef.current;
+
+        await syncAuthoritative({
+          command: direction,
+          errorId,
+          snapshot: viewport?.captureViewportSnapshot()
+        }).catch(() => undefined);
         setIsMutating(false);
       } finally {
         historyPendingRef.current = false;
       }
     },
-    [client]
+    [client, reportClientIssue, syncAuthoritative]
   );
+
+  const retrySync = useCallback(async () => {
+    const error = new Error(
+      "User requested authoritative synchronization."
+    );
+    const errorId = reportClientIssue({
+      command: "retrySync",
+      phase: "requested",
+      error,
+      level: "info"
+    });
+
+    await syncAuthoritative({
+      command: "retrySync",
+      errorId,
+      snapshot:
+        viewportRef.current?.captureViewportSnapshot()
+    }).catch(() => undefined);
+  }, [reportClientIssue, syncAuthoritative]);
 
   const handleSurfaceContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -503,7 +752,8 @@ export function usePatternViewport(client: PatternDocumentClient) {
     state,
     ready: metadata !== null && viewportRef.current !== null,
     isDirty,
-    isMutating,
+    isMutating: isMutating || isSyncBlocked,
+    isSyncBlocked,
     canUndo,
     canRedo,
     actionMessage,
@@ -511,6 +761,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
     goToVectorIndex,
     undo: () => runHistory("undo"),
     redo: () => runHistory("redo"),
+    retrySync,
     insertRows,
     deleteSelectedRows,
     closeContextMenu: () => setContextMenu(null),
@@ -571,7 +822,8 @@ function handlePaste(
     operation: PatternMutationOperation,
     options?: MutationOptions
   ) => Promise<void>,
-  showMessage: (message: string) => void
+  showMessage: (message: string) => void,
+  reportIssue: (issue: ClientIssue) => string
 ): void {
   try {
     const values = parseClipboardTsv(event.clipboardText);
@@ -595,7 +847,15 @@ function handlePaste(
       values
     });
   } catch (error) {
-    showMessage(`粘贴失败：${toErrorMessage(error)}`);
+    const errorId = reportIssue({
+      command: "paste",
+      phase: "parseSelection",
+      error,
+      level: "warn"
+    });
+    showMessage(
+      `粘贴失败：${toErrorMessage(error)}（错误 ID：${errorId}）`
+    );
   }
 }
 
@@ -616,4 +876,39 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "Pattern request failed.";
+}
+
+function getRequestErrorDetail(
+  error: unknown
+): PatternRequestError | undefined {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("detail" in error)
+  ) {
+    return undefined;
+  }
+
+  const detail = error.detail;
+
+  if (
+    !detail ||
+    typeof detail !== "object" ||
+    !("code" in detail) ||
+    !("message" in detail)
+  ) {
+    return undefined;
+  }
+
+  const code = detail.code;
+
+  if (
+    code !== "REVISION_CONFLICT" &&
+    code !== "VALIDATION_ERROR" &&
+    code !== "INTERNAL_ERROR"
+  ) {
+    return undefined;
+  }
+
+  return detail as PatternRequestError;
 }

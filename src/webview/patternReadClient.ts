@@ -19,7 +19,8 @@ import type {
   PatternRequestPayloadMap,
   PatternWindowRequest,
   PatternWindowResponse,
-  WebviewRequestMessage
+  WebviewRequestMessage,
+  WebviewToExtensionMessage
 } from "../shared/protocol";
 
 declare function acquireVsCodeApi(): {
@@ -136,6 +137,13 @@ export function createVsCodePatternClient(): PatternDocumentClient {
         "runHistory",
         direction
       );
+    },
+    reportClientLog(entry) {
+      const message: WebviewToExtensionMessage = {
+        kind: "clientLog",
+        entry
+      };
+      vscode.postMessage(message);
     },
     onDidChangeDocumentState(listener) {
       documentStateListeners.add(listener);
