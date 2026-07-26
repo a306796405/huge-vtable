@@ -15,7 +15,7 @@
 | 功能 | 后端职责 | 前端接入点 |
 | --- | --- | --- |
 | C++ Mutation 接入 | C++ 文档结构和一次 revision | 替换当前 synthetic `applyMutation()` 实现 |
-| Undo/Redo | C++ 会话历史和逆向 effects | Provider 改用 `CustomDocumentEditEvent` |
+| 生产级 Undo/Redo | C++ 会话历史、上限和逆向 effects | Provider 已接入 `CustomDocumentEditEvent`，替换 backend 即可 |
 | 动态 Signal | Signal Catalog、稳定 signalId、projection | `PatternTable` 根据当前 Layout 创建 columns |
 | Configure Layout | 不修改文档 | 保存到 VS Code 用户/workspace state |
 | 静态 Cycle | 显式重新计算派生数据 | 过期时灰显并禁用静态 Cycle 搜索 |

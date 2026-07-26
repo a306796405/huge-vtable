@@ -1,99 +1,158 @@
-# Pattern VTable v22-lite：亿级渲染与基础编辑
+# Pattern VTable v22-lite：Plugin-First 亿级可编辑表格
 
-这是 v22-lite 只读版的可编辑延伸。它保留轻量窗口滚动，只增加迁移真实
-Pattern 前必须验证的基础写入：
+这是 v22-lite 只读验证版的可编辑延伸，正式入口是 VS Code Custom Editor。
+它验证前端只维护小窗口时，Pattern 文档能否完成亿级滚动、事务编辑、历史和
+文件生命周期。浏览器入口只用于快速调试和可重复性能采样。
 
-- 右键在选中行上方或下方插入 1～10,000 行。
-- 右键删除选区涉及的行。
+## 当前已经实现
+
+- 0～3 亿 synthetic 逻辑行；默认 1 亿。
+- VTable 同时只接收当前最多 1,000 行。
+- 原生纵向逻辑 scrollbar＋VTable 横向 scrollbar。
+- Go To、连续滚轮、Home/End、PageUp/PageDown。
 - 双击编辑 Instruction、Comment 和 Signal。
-- Copy 后从一个单元格 Paste；越过文档末尾的部分自动追加空白行。
-- VS Code dirty、Save、Save As、Backup 和 Revert。
-
-本目录独立维护，原 v22/v23 和只读 v22-lite 均未修改。本版不实现
-Undo/Redo、Cycle 重算、搜索、Failure、Annotation、Sync Marker 或
-Configure Layout。
-
-## 架构结论
-
-- 不使用 `DataSource/CachedDataSource` 或 TanStack Virtual。
-- VTable 同时最多接收 1,000 行，cache 最多保留三个窗口。
-- React state 不保存窗口 rows。
-- 亿级基础数据不物化；synthetic backend 只保存基础段、插入段和稀疏修改。
 - Insert、Delete、Update、Paste 共用一个 `applyMutation()`。
-- Paste 的更新与越界追加是一次 revision、一次事务。
-- 结构修改在新窗口准备好前保留旧 Canvas，不先清空表格。
-- 正式入口是 Editable VS Code Custom Editor；浏览器只用于快速调试。
+- Paste 在一次事务中同时更新已有行并在末尾越界新增。
+- Cmd/Ctrl+A、C、V 可在 VS Code Webview 中工作。
+- VS Code CustomDocumentEditEvent Undo/Redo。
+- dirty、Save、Save As、Backup 和 Revert。
+- mutation 后视口锚定和横向位置恢复。
+- staged replacement：新窗口准备好前保留旧 Canvas。
+- 统一错误 ID、LogOutputChannel、single-flight 权威恢复和“重新同步”。
+- 同一 `.pat` 文档只允许一个 Pattern Editor。
 
-## 运行
+## 当前边界
+
+- 当前 backend 是 TypeScript synthetic 参考实现，不读取真实 UTD/`.pat`。
+- synthetic 基础亿级数据不会物化，只保存 piece、插入行和稀疏修改。
+- 真实产品由 C++ ICE 实现 `PatternBackend`。
+- 当前列固定为 12 个 Signal，不能代表真实最大列数。
+- synthetic Undo/Redo 使用参考快照，真实历史上限和内存策略由 C++ 决定。
+- 本版不实现 Cycle 重算、Find/Replace、Failure、错误轨、Annotation、
+  Sync Marker 或修改角标。
+- 不考虑 Timing、Level、Test Table。
+
+## 架构不变量
+
+```mermaid
+flowchart LR
+    UI["PatternEditorApp"] --> Controller["usePatternViewport"]
+    Controller --> Runtime["LogicalViewport"]
+    Runtime --> Adapter["VTableAdapter"]
+    Adapter --> VTable["React VTable<br/>当前窗口"]
+    Controller --> Client["PatternDocumentClient"]
+    Client --> Provider["VS Code Custom Editor Provider"]
+    Provider --> Backend["PatternBackend<br/>当前 synthetic / 未来 C++ ICE"]
+```
+
+- 不使用 `DataSource/CachedDataSource`。
+- React state 不保存窗口 rows。
+- runtime 最多缓存三个窗口，VTable 只渲染其中一个。
+- `rowKey` 是会话内 opaque 稳定身份，前端不得解析。
+- revision、mutation、Undo/Redo 和保存真源都在 backend。
+- adapter 不导入 Pattern 字段或业务 operation。
+- 无法确认写结果时不重试 mutation，只读取 metadata 和权威窗口。
+
+## 缓存
+
+默认值：
+
+```text
+windowSize = 1000
+windowShift = 500
+guardRows = 150
+cacheWindowLimit = 3
+```
+
+缓存 key 是 `revision:windowStartVectorIndex`。相同 key 的 pending 请求复用
+Promise；活跃缓存硬上限为前窗、当前窗、后窗三个 entry。结构 mutation 和
+批量 Paste 读取新 revision 的权威窗口；单行编辑优先原子迁移重叠缓存，失败
+时回退到 staged 权威同步。React state 只接收状态摘要。
+
+## 运行和构建
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-浏览器调试：
+浏览器快速调试：
 
-- `http://127.0.0.1:5173/?rows=0`
-- `http://127.0.0.1:5173/?rows=10000`
-- `http://127.0.0.1:5173/?rows=100000000`
-- 可附加 `&delay=100` 模拟窗口延迟。
+```text
+http://127.0.0.1:5173/?rows=0
+http://127.0.0.1:5173/?rows=10000
+http://127.0.0.1:5173/?rows=100000000
+http://127.0.0.1:5173/?rows=100000000&delay=100&perf=1
+```
 
 插件调试：
 
 1. 用 VS Code 打开本目录。
-2. 按 `F5`，选择对应的 v22-lite Launch 配置。
-3. 若 `.pat` 被文本编辑器打开，执行
+2. 按 `F5` 启动 Extension Development Host。
+3. 打开 `examples/acceptance` 中的 `.pat`。
+4. 必要时执行
    `Reopen With... -> Pattern Editor Lite Editable (.pat)`。
-4. 按 [MANUAL_TEST_GUIDE.md](./MANUAL_TEST_GUIDE.md) 验证。
 
-构建和现有四个自动测试：
+本轮不新增或运行单元测试，构建使用：
 
 ```bash
-pnpm build
+pnpm build:webview
+pnpm build:extension
 ```
 
-## 页面交互
+完整人工验收：
 
-- `Go To Offset` 保留 v22 已确认的尺寸和 0-based 语义。
-- 拖动右侧原生 scrollbar 浏览全局位置，滚轮按真实逻辑像素移动。
-- 横向滚动由 VTable 负责。
-- 双击可编辑列；Vector、Cycle 始终只读。
-- 右键旧选区内任意单元格会处理整个选区涉及的行；右键选区外只处理当前行。
-- VTable 处理 Copy，原始 DOM Paste 被转换为一次后端事务。
-- 底部 `Modified` 同时对应 backend dirty 与 VS Code Custom Editor dirty。
-- 本轮不实现 Undo/Redo；可使用 `File: Revert File` 放弃未保存修改。
+- [功能、快捷键和生命周期](./MANUAL_TEST_GUIDE.md)
+- [1 亿行性能与内存](./docs/acceptance/PERFORMANCE_ACCEPTANCE_GUIDE.md)
+- [验收数据](./examples/acceptance/README.md)
 
 ## 推荐阅读顺序
 
-业务迁移按顺序看，不要先进入滚动内部：
+业务迁移按顺序阅读：
 
-1. `src/shared/protocol.ts`：行模型、统一 mutation 和 revision。
-2. `src/webview/patternReadClient.ts`：Webview 与 Extension 请求配对。
-3. `src/webview/usePatternViewport.ts`：公开 controller 和统一失败回退。
-4. `src/webview/PatternEditorApp.tsx`：Go To、菜单、表格、状态栏。
-5. `src/webview/PatternTable.tsx`：列定义、双击 editor 和 Surface。
-6. `src/extension/patternBackend.ts`：未来 C++ ICE 替换合同。
-7. `src/extension/patternEditorProvider.ts`：dirty、Save、Backup、Revert。
-8. `src/core/logicalViewport.ts`：窗口、缓存和 staged reload 黑盒。
-9. `src/core/logicalViewportMath.ts`：逻辑像素映射。
-10. `src/core/vtableAdapter.ts`：VTable imperative API 唯一隔离点。
+1. `src/shared/protocol.ts`：行模型、revision、统一 mutation。
+2. `src/extension/patternBackend.ts`：未来 C++ ICE 实现合同。
+3. `src/pattern-domain/patternTableBinding.ts`：Pattern 列与通用表格映射。
+4. `src/webview/patternReadClient.ts`：Webview 请求桥。
+5. `src/webview/usePatternViewport.ts`：业务 controller、恢复和历史。
+6. `src/webview/PatternTable.tsx`：Pattern 配置注入公共 Surface。
+7. `src/webview/PatternEditorApp.tsx`：插件页面装配。
+8. `src/extension/patternEditorProvider.ts`：请求路由和文件生命周期。
 
-真实业务通常重点理解前七项。第 8～10 项可以先作为稳定核心；尤其
-`tableY`、冻结高度和 `renderAsync()` 只允许出现在 adapter。
+稳定核心通常只需理解接口：
 
-## 写入数据流
+9. `src/editor-shell/DocumentTableSurface.tsx`。
+10. `src/core/vtableAdapter.ts`。
+11. `src/core/logicalViewport.ts`。
+12. `src/core/logicalViewportMath.ts`。
 
-```text
-右键 / 双击 / Paste
-          ↓
-usePatternViewport（统一事务、失败回退、视口快照）
-          ↓ applyMutation(baseRevision, operation)
-PatternDocumentClient → Provider → PatternBackend
-          ↓
-局部 Update：迁移重叠 cache
-结构/Paste：后台取权威窗口，再一次性替换 Canvas
+`src/dev-only`、`examples/acceptance` 和性能探针只用于学习与验证，不迁移到
+真实 Pattern Webview。尤其不要从 runtime 内部开始阅读。
+
+## Mutation 与恢复数据流
+
+```mermaid
+sequenceDiagram
+    participant UI as Pattern UI
+    participant C as Controller
+    participant B as Backend
+    participant R as Runtime/VTable
+
+    UI->>C: applyMutation(operation)
+    C->>B: baseRevision + operation
+    alt 提交成功
+        B-->>C: revision + effects
+        C->>R: 局部迁移或 staged replace
+    else 校验错误
+        B-->>C: VALIDATION_ERROR
+        C->>R: 仅回退乐观单元格
+    else 结果不明确
+        B--xC: revision/transport/internal error
+        C->>B: getMetadata + getWindow
+        C->>R: 保留旧 Canvas 后一次提交
+    end
 ```
 
-真实 C++ 接入时替换字段模型、列、client 和 backend；不要复制
-`src/dev-only`。具体文件差异见
-[CHANGES_FROM_READONLY.md](./CHANGES_FROM_READONLY.md)。
+更多迁移差异见
+[CHANGES_FROM_READONLY.md](./CHANGES_FROM_READONLY.md)，未来功能接入点见
+[FUTURE_EXTENSION_POINTS.md](./FUTURE_EXTENSION_POINTS.md)。

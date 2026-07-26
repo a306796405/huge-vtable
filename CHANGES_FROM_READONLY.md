@@ -14,32 +14,23 @@ git show 5b27503
 
 建议先看每次 `--stat`，再只打开关心的文件，不要从完整 diff 开始。
 
-## 实际代码量
+## 代码量为什么增加
 
-完成实现并检查重复逻辑后，实际 TypeScript/TSX 行数为：
-
-| 版本 | `src` 行数 | 与本版关系 |
-| --- | ---: | --- |
-| 原 v22 performance validation | 9,169 | 本版约少 45% |
-| v22-lite readonly | 2,395 | 本版的只读基线 |
-| v22-lite editable | 5,043 | 当前结果 |
-
-当前版本比只读版增加 2,648 个物理代码行，超过了实施前
-1,200～1,600 行的估算。检查后没有发现值得保留的重复组件体系；主要偏差来自：
+不再记录容易随注释和验收工具失效的精确行数。相对只读版，主要增量来自：
 
 - `src/dev-only/syntheticPatternStore.ts` 约 925 行。它为了在 1 亿基础行上
   演示插入、删除、Paste 和持久化，实现了可校验的稀疏 piece store；真实
   Pattern 迁移时由 C++ backend 替换，不进入产品 Webview。
-- `logicalViewport.ts` 和 `usePatternViewport.ts` 合计增加约 690 行，用于
-  staged reload、视口补偿、局部更新和写入失败回退。
+- `logicalViewport.ts` 和 `usePatternViewport.ts` 用于 staged reload、视口
+  补偿、局部更新、统一日志和权威失败恢复。
 - Editable Custom Editor 的 Save、Save As、Backup、Revert 生命周期不能由
   浏览器 Demo 代替。
+- VS Code Clipboard 和 CustomDocumentEditEvent 历史需要插件宿主协作。
 
-因此没有为了达到预估数字删除事务校验或把逻辑重新糅进 React 组件。即便包含
-开发专用 synthetic store，本版仍明显小于原 v22，也没有引入 DocumentSession、
-span tree、history 或 command executor。
+因此没有为了压缩物理行数删除事务校验或把逻辑重新糅进 React 组件。通用
+Surface/adapter、Pattern binding、controller 和参考 backend 仍保持清楚边界。
 
-## 三个阶段
+## 演进阶段
 
 | 阶段 | 内容 | 阅读建议 |
 | --- | --- | --- |
@@ -47,6 +38,9 @@ span tree、history 或 command executor。
 | viewport fix | 删除末尾 padding、统一 Index/Px 命名 | 重点看 viewport 和 adapter |
 | editable mutations | 右键、双击、Paste、统一事务 | 重点看 protocol 和 controller |
 | persistence | Editable Provider、Save/Revert、文档 | 真实插件接入必读 |
+| plugin input | VS Code Clipboard、单编辑器 | 重点看 adapter 和 provider |
+| history | CustomDocumentEditEvent Undo/Redo | 前端不保存历史栈 |
+| recovery | 错误 ID、日志、single-flight 同步 | 业务调用方无需补失败分支 |
 
 ## 新增文件
 
@@ -54,6 +48,7 @@ span tree、history 或 command executor。
 | --- | --- | --- |
 | `src/webview/clipboardTsv.ts` | 剪贴板 TSV 解析 | 是 |
 | `src/dev-only/syntheticPatternStore.ts` | 亿级 synthetic 的稀疏可编辑存储 | 否，C++ 替换 |
+| `src/dev-only/performanceProbe.ts` | 浏览器性能采样 | 否 |
 | `MANUAL_TEST_GUIDE.md` | 浏览器与插件手工验收 | 按需 |
 | `CHANGES_FROM_READONLY.md` | 分阶段代码对比 | 否 |
 
@@ -62,7 +57,7 @@ span tree、history 或 command executor。
 | 文件 | 修改原因 | 迁移真实业务 |
 | --- | --- | --- |
 | `shared/protocol.ts` | 新增统一 `applyMutation()` | 按 Pattern 字段替换 |
-| `usePatternViewport.ts` | 统一提交、回退和 staged reload | 是 |
+| `usePatternViewport.ts` | 统一提交、日志、回退和 staged reload | 是 |
 | `PatternTable.tsx` | 双击 editor、Copy/Paste 入口 | 按列调整 |
 | `PatternEditorApp.tsx` | 紧凑右键菜单和状态 | 按产品 UI 调整 |
 | `logicalViewport.ts` | mutation 后局部迁移或权威替换 | 是，作为黑盒 |
@@ -79,8 +74,9 @@ span tree、history 或 command executor。
 
 ## 明确未引入
 
-- 没有搬回旧 v22 的 DocumentSession、span tree、history 或 command executor。
-- 没有新增测试文件；只调整原架构边界断言。
+- 没有搬回旧 v22 的 DocumentSession 或 span tree。
+- 没有新增单元测试；人工验收数据和性能探针与生产入口隔离。
 - 没有把窗口 rows 放入 React state。
 - 没有移除 VTable 1.22.2 内部度量 API；它们仍只在 adapter。
-- 没有实现 Undo/Redo 和后续 Pattern 业务功能。
+- 没有在 Webview 维护 Undo/Redo 栈；历史由 Custom Editor/backend 负责。
+- 没有实现 Cycle、Find/Replace、Failure 等后续 Pattern 业务功能。
