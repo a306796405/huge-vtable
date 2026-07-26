@@ -105,6 +105,7 @@ pnpm build:extension
 - [功能、快捷键和生命周期](./MANUAL_TEST_GUIDE.md)
 - [1 亿行性能与内存](./docs/acceptance/PERFORMANCE_ACCEPTANCE_GUIDE.md)
 - [验收数据](./examples/acceptance/README.md)
+- [宣讲用 Markdown 技术方案](./docs/v22-lite-markdown-technical-solution.md)
 
 ## 推荐阅读顺序
 
