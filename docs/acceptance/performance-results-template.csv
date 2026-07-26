@@ -1,0 +1,1 @@
+date,commit,environment,rows,signal_columns,delay_ms,scenario,elapsed_ms,get_window_count,get_window_p50_ms,get_window_p95_ms,get_window_max_ms,long_task_p95_ms,long_task_max_ms,frame_gap_p95_ms,heap_start_bytes,heap_current_bytes,heap_growth_percent,blank_canvas_count,position_jump_count,result,notes

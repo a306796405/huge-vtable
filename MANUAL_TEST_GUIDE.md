@@ -34,6 +34,9 @@ VS Code zoom：
 
 测试数据说明见
 [examples/acceptance/README.md](./examples/acceptance/README.md)。
+1 亿行性能和内存按
+[docs/acceptance/PERFORMANCE_ACCEPTANCE_GUIDE.md](./docs/acceptance/PERFORMANCE_ACCEPTANCE_GUIDE.md)
+单独执行。
 
 ## 2. 紧凑布局、滚动和末行
 

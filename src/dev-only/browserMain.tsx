@@ -11,6 +11,7 @@ import {
   MIN_TOTAL_VECTORS,
   SyntheticPatternBackend
 } from "./syntheticPatternBackend";
+import { installPatternPerformanceProbe } from "./performanceProbe";
 
 const root = document.querySelector("#app");
 
@@ -29,10 +30,14 @@ const delayMs = clampInteger(
   0,
   5_000
 );
-const client = new SyntheticPatternBackend({
+const backend = new SyntheticPatternBackend({
   totalVectors,
   delayMs
 });
+const client =
+  params.get("perf") === "1"
+    ? installPatternPerformanceProbe(backend)
+    : backend;
 
 document.title = `Pattern Editor Lite · ${totalVectors} rows`;
 createRoot(root).render(<PatternEditorApp client={client} />);
