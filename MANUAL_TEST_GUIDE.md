@@ -1,178 +1,347 @@
-# v22-lite Editable 手工测试指南
+# v22-lite VS Code 人工验收指南
 
-本文是本轮主要验收清单。自动测试只保留原有四个文件，不用它代替真实
-浏览器和 Extension Development Host 的视觉、键盘和保存验证。
+本指南由项目提供测试数据、操作场景和通过标准，最终结果由验收人填写。
+它验证的是 VS Code Custom Editor 产品入口；浏览器页面只用于快速定位布局
+问题，不能代替插件验收。
 
-## 0. 测试前准备
+本轮不要求新增或运行单元测试。修改代码后只检查：
 
 ```bash
-pnpm build
-pnpm dev
+pnpm build:webview
+pnpm build:extension
 ```
 
-记录：
+## 1. 验收准备
 
-- VS Code 版本与 zoom level。
-- macOS 显示缩放。
-- 浏览器窗口或 VS Code editor 区域尺寸。
-- 测试文件、初始行数和失败步骤截图。
+1. 用 VS Code 打开项目根目录。
+2. 按 `F5` 启动 Extension Development Host。
+3. 从 `examples/acceptance` 选择测试文件。
+4. 如果文件以文本打开，执行
+   `Reopen With... -> Pattern Editor Lite Editable (.pat)`。
+5. 打开 `View -> Output`，选择 `Pattern Editor Lite`，用于核对错误日志。
+6. 涉及 Save、Delete 或 Paste 时先复制测试文件，不修改验收基准。
 
-每轮先确认开发者控制台没有未捕获异常。
-
-## 1. 浏览器快速回归
-
-分别打开：
+记录以下环境：
 
 ```text
-http://127.0.0.1:5173/?rows=0
-http://127.0.0.1:5173/?rows=10000
-http://127.0.0.1:5173/?rows=100000000
+验收日期：
+操作系统：
+VS Code 版本：
+显示分辨率 / 缩放：
+VS Code zoom：
+项目 commit：
 ```
 
-### 1.1 0 行
+测试数据说明见
+[examples/acceptance/README.md](./examples/acceptance/README.md)。
 
-1. 确认表格没有伪造空 record。
-2. 在表格空白区域右键。
-3. 输入 3，点击“插入空白行”。
-4. 确认 Rows=3，Vector 为 0、1、2，其余可编辑字段为空。
-5. 双击 Instruction 输入 `START`，按 Enter。
-6. 确认状态栏显示 Modified，值不闪回。
+## 2. 紧凑布局、滚动和末行
 
-### 1.2 10,000 行末尾
+使用 `02-window-boundary-1999.pat`、`03-direct-pixel-4000.pat` 和
+`04-compressed-100m.pat`。
 
-1. Go To Offset 输入 `9999`。
-2. 再分别使用 End 和拖动右侧 scrollbar 到底。
-3. 确认最后一个真实 record 是 Vector 9999。
-4. 确认 9999 下方没有额外空数据行。
-5. 确认文字、28px 行高、底部边框和横向滚动条完整。
-6. 水平拖到最右，确认最后一个 Signal 可见且底部不被遮挡。
+### 场景 2.1：表格区域
 
-### 1.3 亿级定位
+1. 最大化和缩小编辑器区域。
+2. 确认工具栏和状态栏保持单行，VTable 占据中间全部剩余高度。
+3. 确认页面本身没有额外纵向滚动条。
+4. 缩小高度后确认表格仍可滚动，没有只剩表头。
 
-1. 在 1 亿行页面跳到 0、49,999,999、99,999,999。
-2. 分别使用滚轮、PageUp/PageDown、Home/End。
-3. 确认滚轮连续移动，没有一次跳几千行。
-4. 确认跳转时旧表格在新窗口成功前仍然可见。
-5. 打开 `&delay=500` 重复，观察窗口切换期间不白屏。
+通过标准：
 
-## 2. 插入
+- 表格不白屏、不溢出 Custom Editor。
+- 原生纵向 scrollbar 和 VTable 横向 scrollbar 都可见、可拖动。
+- 横向 scrollbar 不遮挡最后一行。
 
-在 10,000 行页面进行：
+### 场景 2.2：全局定位和最后一行
 
-1. 右键 Vector 10 对应任意单元格。
-2. 输入 1，选择“在上方插入”。
-3. 确认新增行 Vector=10，原 Vector 10 后移，新增字段为空。
-4. 在新增行右键，输入 3，选择“在下方插入”。
-5. 确认总行数增加 3，新增行连续且空白。
-6. 输入 10,000 插入，确认允许且操作只推进一次 revision。
-7. 输入 0、负数、小数和大于 10,000 的值，确认 UI 钳位或后端拒绝。
-8. 在可视窗口首尾分别插入，确认纵向和横向位置没有突然归零。
+分别执行：
 
-## 3. 删除
+| 文件 | Go To Offset |
+| --- | ---: |
+| `02-window-boundary-1999.pat` | `1998` |
+| `03-direct-pixel-4000.pat` | `3999` |
+| `04-compressed-100m.pat` | `99999999` |
+| `05-capacity-300m.pat` | `299999999` |
 
-1. 单击一个单元格后右键，删除 1 行。
-2. 拖选跨多列、跨多行的矩形，右键选区内部。
-3. 确认菜单中的删除行数按 rowKey 去重，不按单元格数量计算。
-4. 删除后确认 Vector 连续重算，未删除基础行 rowKey 保持稳定。
-5. 建立选区后，在选区外另一个单元格右键。
-6. 确认只删除右键所在行。
-7. 在小数据页面选中全部行并删除到 0 行。
-8. 确认表格为空、Rows=0，随后仍能右键重新插入。
+每个文件再执行 End、拖动纵向 scrollbar 到底和水平拖到最右。
 
-## 4. 双击单元格更新
+通过标准：
 
-1. 双击 Instruction，输入文本并按 Enter。
-2. 双击 Comment，输入空字符串覆盖旧值。
-3. 双击多个 Signal，分别输入 `0`、`1`、`X` 和空字符串。
-4. 确认每次成功修改只推进一次 revision。
-5. 双击 Vector、Cycle，确认不会进入编辑。
-6. 在输入框内使用方向键、Home/End，确认只移动光标，不滚动表格。
-7. 使用 `?delay=1000`，第一次修改提交期间立即改第二格。
-8. 确认第二项不会产生未受控并发写入；失败值恢复且状态栏给出原因。
+- 最后一个 Vector 与表中目标一致。
+- 最后一行文字、行高和底部网格线完整。
+- 不存在 padding record 或额外空白数据行。
+- compressed 模式拖动后仍可用滚轮逐行附近移动。
+- 横向位置不因纵向窗口切换归零。
 
-## 5. Copy/Paste
+## 3. 编辑和统一 Mutation
 
-### 5.1 纯更新
+使用 `01-small-100.pat` 的副本。
 
-1. 选中连续的 Instruction、Comment 或 Signal 单元格并复制。
-2. 选中另一个可编辑单元格，按 Ctrl/Cmd+V。
-3. 确认矩阵形状、空单元格和制表符对应关系正确。
-4. 确认一次 Paste 只产生一次 revision。
+### 场景 3.1：单元格编辑
 
-### 5.2 越界追加
+1. 双击 Instruction、Comment 和 Signal。
+2. 分别输入普通文本、空字符串、`0`、`1` 和 `X`。
+3. 尝试双击 Vector 和 Cycle。
 
-1. Go To 最后一行。
-2. 从最后两行附近的 Instruction 开始，粘贴 5 行 × 2 列 TSV。
-3. 确认文档内部分被更新，越界部分新增空白行。
-4. 确认新增行未覆盖的 Comment/Signal 保持空字符串。
-5. 确认更新与新增同时成功，没有中间只完成一半的画面。
+通过标准：
 
-### 5.3 非法范围
+- 可编辑列提交后保持新值，状态栏出现 `Modified`。
+- 每次编辑只对应一次历史操作。
+- Vector、Cycle 不进入编辑。
+- 编辑框中的方向键、Home、End 不触发表格滚动。
 
-1. 从 Vector 或 Cycle 列开始 Paste，确认整次拒绝。
-2. 从最后一个 Signal 开始粘贴两列，确认整次拒绝而非截断。
-3. 粘贴不规则 TSV、超过 10,000 行或超过 100,000 单元格。
-4. 确认 revision、总行数和原单元格均不变化。
-5. 粘贴跨越当前 1,000 行窗口的数据，确认后端接收完整矩阵。
+### 场景 3.2：插入和删除
 
-## 6. VS Code Custom Editor
+1. 在 Vector 10 上方插入 5 行。
+2. 确认原 Vector 10 的数据下移，新增行字段为空。
+3. 选择连续 3 行并删除。
+4. 在选区外右键另一行，确认菜单只针对右键行。
+5. 使用 `00-empty.pat` 插入 3 行，再删除到 0 行。
 
-1. 用本目录启动 Extension Development Host。
-2. 打开 `examples/synthetic-1w.pat`。
-3. 确认同一文件不能再打开第二个 Pattern Editor panel。
-4. 完成一次编辑，确认标签出现 dirty 标记，底部显示 Modified。
-5. 按 Ctrl/Cmd+S，确认 dirty 标记和 Modified 消失。
-6. 关闭并重新打开文件，确认插入、删除和修改仍存在。
-7. 执行 Save As，打开目标文件确认内容一致。
-8. 修改但不保存，执行 `File: Revert File`。
-9. 确认权威磁盘数据恢复，当前 Canvas 不先清空，视口尽量保持。
-10. 修改后等待 VS Code backup，Reload Window，确认 hot-exit 能恢复。
+通过标准：
 
-## 7. VS Code 末行专项验收
+- Insert/Delete 经过一次 `applyMutation()` 和一次 revision。
+- 未删除行的 `rowKey` 稳定；显示 Vector 按新位置重算。
+- 删除到 0 行后仍可重新插入。
+- 操作过程中不先清空 Canvas。
 
-该项必须实际执行，不能只看浏览器：
+## 4. VS Code Clipboard
 
-1. 对 10,000 行执行 Go To 9999、End、拖 scrollbar 到底。
-2. 对 1 亿行执行 Go To 99,999,999、End、拖 scrollbar 到底。
-3. VS Code zoom 分别设为 80%、100%、125%。
-4. 每种组合检查：
-   - 最后一行文字完整。
-   - 行高约 28px，底部网格线完整。
-   - Canvas 不越过 table shell。
-   - 横向滚动条完整且不遮最后一行。
-   - 不存在额外空 record。
-5. 保存 10,000 行和 1 亿行底部截图。
+本节必须在 Extension Development Host 中执行，不能只在普通浏览器执行。
 
-如果仍有裁剪，只记录 zoom、editor 尺寸和截图；不要重新加入 padding row。
+### 场景 4.1：Cmd/Ctrl+A 和 Copy
 
-本轮已保存的默认缩放验收证据：
+1. 点击一个可编辑单元格。
+2. 按 Cmd/Ctrl+A。
+3. 按 Cmd/Ctrl+C。
+4. 粘贴到外部纯文本编辑器，检查 TSV 行列。
+5. 再拖选一个小矩形并复制。
 
-- [10,000 行最后一行](./docs/qa/vscode-10k-last-row.jpeg)
-- [1 亿行最后一行](./docs/qa/vscode-100m-last-row.jpeg)
+通过标准：
 
-实际调试还覆盖了从末尾状态切换 VS Code zoom：布局重算后继续贴底，未丢失
-最后几行。
+- 快捷键焦点留在表格时生效。
+- 复制内容与选区一致，不包含隐藏窗口以外的伪造行。
+- Cmd/Ctrl+A 不触发 VS Code 外层全选。
 
-## 8. 无闪动检查
+### 场景 4.2：范围内 Paste
 
-在 `delay=1000` 下执行插入、删除和 Paste：
-
-- 旧 records 在新窗口成功前保持可见。
-- 不出现白色空表或 loading 遮罩。
-- 提交后纵向首可见 Vector 合理补偿。
-- 横向 `scrollLeft` 不归零。
-- 请求失败时旧 Canvas 和位置不变。
-
-## 9. 测试结果模板
+复制以下 3×3 TSV，从 Instruction 列某行开始按 Cmd/Ctrl+V；第二行中间
+是一个真实空单元格：
 
 ```text
-环境：
-VS Code / zoom：
-文件 / rows：
-操作：
+LOAD	first row	1
+WAIT		X
+STORE	third row	0
+```
+
+通过标准：
+
+- 空单元格覆盖为空字符串。
+- 3×3 矩阵一次提交、一次 revision、一次 Undo。
+- VTable 不在后端成功前自行截断或永久修改 records。
+
+### 场景 4.3：越界 Paste
+
+1. 跳到 `01-small-100.pat` 的 Vector 98。
+2. 从 Instruction 开始粘贴上面的 3×3 TSV。
+
+通过标准：
+
+- Vector 98、99 被更新。
+- 自动新增 Vector 100。
+- 更新和新增同成同败。
+- 新增行获得新 `rowKey`，未覆盖字段为空。
+
+### 场景 4.4：非法 Paste
+
+1. 从 Vector 或 Cycle 开始粘贴。
+2. 从最后一个 Signal 开始粘贴两列。
+3. 尝试不规则矩阵。
+
+通过标准：
+
+- 整次拒绝，不截断、不部分写入。
+- revision 和总行数不变化。
+- 状态栏显示具体原因和错误 ID。
+- Output 日志不包含剪贴板文本或单元格内容。
+
+## 5. 视口锚定
+
+使用 `01-small-100.pat` 的新副本。
+
+### 场景 5.1：首行之前插入/删除
+
+1. 让首个可见数据行为 Vector 5，并记住该行内容。
+2. 在 Vector 5 之前插入 5 行。
+3. 再删除刚插入的 5 行。
+
+通过标准：
+
+- 插入后原先可见的那条数据仍停留在相同屏幕位置，其显示 Vector 由 5
+  变为 10。
+- 删除后同一条数据仍停留在相同屏幕位置，其显示 Vector 恢复为 5。
+- 纵向 scrollbar 会按结构变化补偿，但用户看到的锚点数据不跳动。
+- 横向 `scrollLeft` 始终保持。
+
+### 场景 5.2：删除后数据不足一屏
+
+1. 恢复为 100 行，让首个可见数据行为 Vector 4（第 5 行）。
+2. 保留前 5 行，删除其余 95 行。
+
+通过标准：
+
+- 新文档只有 5 行。
+- 前端重新请求可填满视口的最合理窗口；由于总数据不足一屏，显示
+  Vector 0～4，而不是保留一块从 Vector 4 开始的空白区域。
+- 没有伪造 Vector 5 以后的空 record。
+
+## 6. Undo/Redo
+
+使用 `01-small-100.pat` 的新副本。
+
+依次执行：
+
+1. 编辑一个单元格。
+2. 插入 2 行。
+3. 删除 1 行。
+4. 执行一次包含更新和越界新增的 Paste。
+5. 连续使用工具栏 Undo，直到 `canUndo=false`。
+6. 连续使用工具栏 Redo，直到 `canRedo=false`。
+7. 重复使用 Cmd/Ctrl+Z 和 Cmd/Ctrl+Shift+Z。
+
+通过标准：
+
+- 工具栏与快捷键共用 VS Code CustomDocumentEditEvent 历史链。
+- 每个业务操作只撤销一次；Paste 的更新和新增一起撤销。
+- Undo/Redo 后 revision 单调推进，不回退旧 revision 数字。
+- 行结构、单元格、总行数、dirty 和按钮状态一致。
+- 视口与横向位置合理保持，不白屏。
+
+## 7. 错误日志和无闪动恢复
+
+### 场景 7.1：首次窗口失败
+
+1. 打开 `90-fault-window-once.pat`。
+2. 确认状态栏显示错误 ID 和“重新同步”。
+3. 在 Output 中搜索相同错误 ID。
+4. 点击“重新同步”。
+
+通过标准：
+
+- 首次失败可定位到 `getWindow/viewportStart`。
+- 第二次读取成功后显示 10,000 行元数据和表格。
+- Output 使用同一错误 ID记录失败和 `RECOVERED`。
+- 日志不包含行数据或单元格内容。
+
+### 场景 7.2：首次 Mutation 失败
+
+1. 打开 `91-fault-mutation-once.pat`。
+2. 修改一个单元格。
+3. 观察失败后的表格、状态栏和 Output。
+4. 再修改一次。
+
+通过标准：
+
+- 第一次后端写入没有提交。
+- controller 自动读取 metadata 和权威窗口。
+- 旧 Canvas 在同步完成前保持，没有白屏或 loading 遮罩。
+- 首次乐观值最终恢复为权威值；第二次修改成功。
+- 错误 ID能关联 `applyMutation` 失败和恢复结果。
+
+### 场景 7.3：本地校验错误
+
+执行只读列 Paste。
+
+通过标准：
+
+- 只显示本地错误，不进行窗口重载。
+- 当前 records、纵向和横向位置不变化。
+- 日志级别为 warning，并带错误 ID。
+
+## 8. Save、Revert、Backup 和关闭
+
+使用 `01-small-100.pat` 的副本。
+
+### 场景 8.1：Save 和 dirty 基线
+
+1. 修改单元格，确认编辑器标签和状态栏都显示 dirty。
+2. Cmd/Ctrl+S，确认 dirty 清除。
+3. 再修改一次，然后 Undo 回到保存内容。
+4. Redo，再次离开保存内容。
+
+通过标准：
+
+- 只有宿主写盘成功后 backend 才推进保存基线。
+- 回到保存内容时 dirty 与真实后端状态一致。
+- 保存不会清空当前表格或滚动位置。
+
+### 场景 8.2：Save As
+
+1. 编辑后执行 Save As。
+2. 关闭并打开目标文件。
+
+通过标准：
+
+- 目标文件包含 mutation 结果。
+- 原文件不会被意外覆盖。
+- 保存失败时 dirty 不能被错误清除。
+
+### 场景 8.3：Revert
+
+1. 编辑、插入和 Paste，但不保存。
+2. 执行 `File: Revert File`。
+
+通过标准：
+
+- 磁盘内容重新成为真源。
+- 未保存修改被放弃，dirty 清除。
+- 新窗口准备好前旧 Canvas 保持，纵横位置尽量恢复。
+
+### 场景 8.4：关闭和 Backup
+
+1. 干净状态关闭页面。
+2. 修改后关闭，检查 VS Code 的保存确认。
+3. 修改后执行 `Developer: Reload Window`。
+4. 等待 Custom Editor backup 恢复。
+5. 在窗口读取或 mutation 延迟期间关闭页面。
+
+通过标准：
+
+- 干净页面不产生多余提示。
+- dirty 页面不会静默丢失修改。
+- backup 恢复后显示 Modified。
+- dispose 后迟到响应不能重新更新已关闭 Webview。
+- Output 中没有未处理 Promise rejection。
+
+## 9. 验收结果模板
+
+每个失败场景复制一份：
+
+```text
+场景编号：
+测试文件：
+操作前 Rows / Offset / revision：
+具体操作：
 期望：
 实际：
-是否闪动：
-控制台错误：
-截图：
+是否白屏或跳动：
+错误 ID：
+Output 摘要：
+截图路径：
+结论：通过 / 不通过 / 待确认
+```
+
+最终结论：
+
+```text
+功能与快捷键：
+视口锚定：
+Undo/Redo：
+错误恢复与日志：
+Save/Revert/Backup：
+1 亿行末行：
+阻塞问题：
+验收人：
+日期：
 ```

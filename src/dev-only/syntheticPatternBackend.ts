@@ -33,12 +33,21 @@ export const MAX_WINDOW_LIMIT = 1_000;
 export const MAX_MUTATION_ROWS = 10_000;
 export const MAX_PASTE_CELLS = 100_000;
 
+export type SyntheticDebugFault =
+  | "getWindowOnce"
+  | "applyMutationOnce";
+
 export type SyntheticPatternOptions = {
   totalVectors?: number;
   revision?: number;
   delayMs?: number;
   storeSnapshot?: SyntheticPatternStoreSnapshot;
   isDirty?: boolean;
+  /**
+   * 仅供人工验收统一恢复流程；每种故障最多触发一次。
+   * 正式 PatternBackend/C++ ICE 不实现这项开发能力。
+   */
+  debugFaults?: readonly SyntheticDebugFault[];
 };
 
 type SyntheticPatternFile = {
@@ -73,6 +82,7 @@ export class SyntheticPatternBackend implements PatternBackend {
   private currentContentStateId = 0;
   private savedContentStateId = 0;
   private nextContentStateId = 1;
+  private readonly debugFaults: Set<SyntheticDebugFault>;
 
   constructor(options: SyntheticPatternOptions = {}) {
     const totalVectors = clampInteger(
@@ -98,6 +108,7 @@ export class SyntheticPatternBackend implements PatternBackend {
     );
     this.delayMs = clampInteger(options.delayMs ?? 0, 0, 5_000);
     this.savedContentStateId = options.isDirty ? -1 : 0;
+    this.debugFaults = new Set(options.debugFaults);
   }
 
   static fromBytes(
@@ -141,7 +152,8 @@ export class SyntheticPatternBackend implements PatternBackend {
         typeof parsed.totalVectors === "number"
           ? parsed.totalVectors
           : DEFAULT_TOTAL_VECTORS,
-      isDirty: options.isDirty
+      isDirty: options.isDirty,
+      debugFaults: readDebugFaults(parsed)
     });
   }
 
@@ -153,6 +165,13 @@ export class SyntheticPatternBackend implements PatternBackend {
     request: PatternWindowRequest
   ): Promise<PatternWindowResponse> {
     validateWindowRequest(request, this.createMetadata());
+
+    if (this.consumeDebugFault("getWindowOnce")) {
+      throw new Error(
+        "Synthetic one-shot getWindow failure for manual acceptance."
+      );
+    }
+
     await this.waitForDelay();
 
     if (this.store.totalVectors === 0) {
@@ -187,6 +206,12 @@ export class SyntheticPatternBackend implements PatternBackend {
     this.validateStoreSpecificOperation(request.operation);
     await this.waitForDelay();
     this.assertRevision(request.baseRevision);
+
+    if (this.consumeDebugFault("applyMutationOnce")) {
+      throw new Error(
+        "Synthetic one-shot applyMutation failure for manual acceptance."
+      );
+    }
 
     const previousRevision = this.revision;
     const before = this.captureContentState(
@@ -312,6 +337,12 @@ export class SyntheticPatternBackend implements PatternBackend {
 
   dispose(): void {
     this.documentStateListeners.clear();
+  }
+
+  private consumeDebugFault(
+    fault: SyntheticDebugFault
+  ): boolean {
+    return this.debugFaults.delete(fault);
   }
 
   private execute(
@@ -625,6 +656,23 @@ function mutationMessage(
     case "paste":
       return "粘贴事务已提交。";
   }
+}
+
+function readDebugFaults(
+  value: unknown
+): SyntheticDebugFault[] {
+  if (
+    !isObjectRecord(value) ||
+    !Array.isArray(value.debugFaults)
+  ) {
+    return [];
+  }
+
+  return value.debugFaults.filter(
+    (fault): fault is SyntheticDebugFault =>
+      fault === "getWindowOnce" ||
+      fault === "applyMutationOnce"
+  );
 }
 
 function clampInteger(
