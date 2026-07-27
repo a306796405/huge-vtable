@@ -10,6 +10,8 @@
  * 与写事务分开，由 VS Code Custom Editor 历史栈触发后端会话历史。
  */
 
+import type { EditorDiagnosticEntry } from "../diagnostics";
+
 export const SIGNAL_IDS = [
   "SIG_A",
   "SIG_B",
@@ -158,7 +160,7 @@ export interface PatternDocumentClient {
    * Webview 只上报诊断上下文，不上报行、单元格或剪贴板内容。
    * 浏览器 Demo 可以不实现；VS Code client 会转发到 LogOutputChannel。
    */
-  reportClientLog?(entry: PatternClientLogEntry): void;
+  reportDiagnostic?(entry: EditorDiagnosticEntry): void;
   dispose?(): void;
 }
 
@@ -202,21 +204,6 @@ export type PatternRequestError = {
   currentRevision?: number;
 };
 
-export type PatternClientLogEntry = {
-  errorId: string;
-  level: "info" | "warn" | "error";
-  command: string;
-  phase: string;
-  revision: number;
-  windowStartVectorIndex: number;
-  code:
-    | PatternRequestError["code"]
-    | "CLIENT_ERROR"
-    | "RECOVERED";
-  message: string;
-  stack?: string;
-};
-
 export type ExtensionResponseMessage =
   | {
       kind: "response";
@@ -240,11 +227,11 @@ export type ExtensionToWebviewMessage =
   | ExtensionResponseMessage
   | ExtensionDocumentStateMessage;
 
-export type WebviewClientLogMessage = {
-  kind: "clientLog";
-  entry: PatternClientLogEntry;
+export type WebviewDiagnosticMessage = {
+  kind: "diagnostic";
+  entry: EditorDiagnosticEntry;
 };
 
 export type WebviewToExtensionMessage =
   | WebviewRequestMessage
-  | WebviewClientLogMessage;
+  | WebviewDiagnosticMessage;

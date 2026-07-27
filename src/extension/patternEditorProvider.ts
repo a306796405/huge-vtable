@@ -10,6 +10,7 @@
  */
 
 import * as vscode from "vscode";
+import type { EditorDiagnostics } from "../diagnostics";
 import { SyntheticPatternBackend } from "../dev-only/syntheticPatternBackend";
 import type {
   ExtensionResponseMessage,
@@ -17,7 +18,6 @@ import type {
   PatternDocumentStateEvent,
   PatternHistoryDirection,
   PatternHistoryResponse,
-  PatternClientLogEntry,
   PatternMutationRequest,
   PatternRequestError,
   PatternWindowRequest,
@@ -56,7 +56,7 @@ export class PatternEditorProvider
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly output: vscode.LogOutputChannel
+    private readonly diagnostics: EditorDiagnostics
   ) {}
 
   async openCustomDocument(
@@ -209,8 +209,8 @@ export class PatternEditorProvider
     webview: vscode.Webview,
     message: WebviewToExtensionMessage
   ): Promise<void> {
-    if (message?.kind === "clientLog") {
-      this.writeClientLog(message.entry);
+    if (message?.kind === "diagnostic") {
+      this.diagnostics.record(message.entry);
       return;
     }
 
@@ -320,10 +320,13 @@ export class PatternEditorProvider
           await document.backend.getMetadata()
         ).revision;
       } catch (metadataError) {
-        this.output.error(
-          `[request:${message.id}] failed to read metadata after ${message.command} error`,
-          metadataError
-        );
+        this.diagnostics.report({
+          area: "provider",
+          operation: message.command,
+          phase: "readMetadataAfterError",
+          requestId: message.id,
+          error: metadataError
+        });
       }
 
       const responseError = toPatternRequestError(
@@ -331,39 +334,19 @@ export class PatternEditorProvider
         currentRevision
       );
 
-      this.output.error(
-        `[request:${message.id}] ${message.command} failed`,
+      this.diagnostics.report({
+        area: "provider",
+        operation: message.command,
+        phase: "request",
+        requestId: message.id,
         error
-      );
+      });
       await respond(webview, {
         kind: "response",
         id: message.id,
         ok: false,
         error: responseError
       });
-    }
-  }
-
-  private writeClientLog(entry: PatternClientLogEntry): void {
-    const errorId = sanitizeLogValue(entry.errorId, 80);
-    const command = sanitizeLogValue(entry.command, 80);
-    const phase = sanitizeLogValue(entry.phase, 80);
-    const code = sanitizeLogValue(entry.code, 40);
-    const message = sanitizeLogValue(entry.message, 500);
-    const stack = entry.stack
-      ? `\n${sanitizeLogValue(entry.stack, 2_000)}`
-      : "";
-    const line =
-      `[${errorId}] ${command}/${phase} ${code}` +
-      ` revision=${entry.revision}` +
-      ` window=${entry.windowStartVectorIndex}: ${message}${stack}`;
-
-    if (entry.level === "error") {
-      this.output.error(line);
-    } else if (entry.level === "warn") {
-      this.output.warn(line);
-    } else {
-      this.output.info(line);
     }
   }
 
@@ -405,10 +388,12 @@ export class PatternEditorProvider
         result
       );
     } catch (error) {
-      this.output.error(
-        `[history:${direction}] failed`,
+      this.diagnostics.report({
+        area: "provider",
+        operation: direction,
+        phase: "history",
         error
-      );
+      });
       throw error;
     }
   }
@@ -455,15 +440,6 @@ function toPatternRequestError(
     message,
     currentRevision
   };
-}
-
-function sanitizeLogValue(
-  value: unknown,
-  maximumLength: number
-): string {
-  return String(value)
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .slice(0, maximumLength);
 }
 
 async function respond(

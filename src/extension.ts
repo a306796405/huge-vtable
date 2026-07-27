@@ -7,6 +7,7 @@
  */
 
 import * as vscode from "vscode";
+import { createVscodeEditorDiagnostics } from "./diagnostics/vscodeEditorDiagnostics";
 import { PatternEditorProvider } from "./extension/patternEditorProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -14,9 +15,10 @@ export function activate(context: vscode.ExtensionContext): void {
     "Pattern Editor Lite",
     { log: true }
   );
+  const diagnostics = createVscodeEditorDiagnostics(output);
   const provider = new PatternEditorProvider(
     context.extensionUri,
-    output
+    diagnostics
   );
 
   context.subscriptions.push(

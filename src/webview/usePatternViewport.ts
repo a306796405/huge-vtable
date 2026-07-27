@@ -15,6 +15,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -25,6 +26,10 @@ import {
   type LogicalViewportState,
   type ViewportSnapshot
 } from "../pattern-large-data-vtable";
+import {
+  createEditorDiagnostics,
+  type EditorDiagnosticLevel
+} from "../diagnostics";
 import {
   type TableCellEditEvent,
   type TableContextMenuEvent,
@@ -37,7 +42,6 @@ import {
   type PatternTableAdapter
 } from "../pattern-domain/patternTableBinding";
 import type {
-  PatternClientLogEntry,
   PatternDocumentClient,
   PatternHistoryDirection,
   PatternMetadata,
@@ -89,7 +93,7 @@ type ClientIssue = {
   command: string;
   phase: string;
   error: unknown;
-  level?: PatternClientLogEntry["level"];
+  level?: EditorDiagnosticLevel;
   errorId?: string;
 };
 
@@ -119,7 +123,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const recoveryDelayResolveRef = useRef<
     (() => void) | null
   >(null);
-  const nextErrorIdRef = useRef(1);
   const [metadata, setMetadata] =
     useState<PatternMetadata | null>(null);
   const [tableAdapter, setTableAdapter] =
@@ -137,6 +140,22 @@ export function usePatternViewport(client: PatternDocumentClient) {
   );
   const [contextMenu, setContextMenu] =
     useState<PatternContextMenuState | null>(null);
+  const diagnostics = useMemo(
+    () =>
+      createEditorDiagnostics({
+        sink: {
+          write(entry) {
+            client.reportDiagnostic?.(entry);
+          }
+        },
+        getContext: () => ({
+          revision: revisionRef.current,
+          windowStartVectorIndex:
+            windowStartRef.current
+        })
+      }),
+    [client]
+  );
 
   const applyMetadata = useCallback(
     (nextMetadata: PatternMetadata) => {
@@ -156,29 +175,16 @@ export function usePatternViewport(client: PatternDocumentClient) {
 
   const reportClientIssue = useCallback(
     (issue: ClientIssue): string => {
-      const errorId =
-        issue.errorId ??
-        `PE-${Date.now().toString(36)}-${nextErrorIdRef.current++}`;
-      const detail = getRequestErrorDetail(issue.error);
-
-      client.reportClientLog?.({
-        errorId,
+      return diagnostics.report({
+        correlationId: issue.errorId,
         level: issue.level ?? "error",
-        command: issue.command,
+        area: "webview",
+        operation: issue.command,
         phase: issue.phase,
-        revision: revisionRef.current,
-        windowStartVectorIndex: windowStartRef.current,
-        code: detail?.code ?? "CLIENT_ERROR",
-        message: toErrorMessage(issue.error),
-        stack:
-          issue.error instanceof Error
-            ? issue.error.stack
-            : undefined
+        error: issue.error
       });
-
-      return errorId;
     },
-    [client]
+    [diagnostics]
   );
 
   const startAutoRecovery = useCallback(
@@ -235,15 +241,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
             setActionMessage(
               `已自动恢复权威数据（错误 ID：${options.errorId}）。`
             );
-            client.reportClientLog?.({
-              errorId: options.errorId,
-              level: "info",
-              command: options.command,
+            diagnostics.recovered({
+              correlationId: options.errorId,
+              area: "recovery",
+              operation: options.command,
               phase: "authoritativeSync",
-              revision: nextMetadata.revision,
-              windowStartVectorIndex:
-                windowStartRef.current,
-              code: "RECOVERED",
               message:
                 "Authoritative metadata and viewport synchronized."
             });
@@ -284,7 +286,12 @@ export function usePatternViewport(client: PatternDocumentClient) {
       recoveryPromiseRef.current = recovery;
       return recovery;
     },
-    [applyMetadata, client, reportClientIssue]
+    [
+      applyMetadata,
+      client,
+      diagnostics,
+      reportClientIssue
+    ]
   );
 
   useEffect(() => {

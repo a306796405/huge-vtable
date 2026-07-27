@@ -161,9 +161,9 @@ export function createVsCodePatternClient(): PatternDocumentClient {
         direction
       );
     },
-    reportClientLog(entry) {
+    reportDiagnostic(entry) {
       const message: WebviewToExtensionMessage = {
-        kind: "clientLog",
+        kind: "diagnostic",
         entry
       };
       vscode.postMessage(message);

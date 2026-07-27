@@ -13,6 +13,8 @@
   },
   "include": [
     "src/pattern-large-data-vtable/**/*",
+    "src/diagnostics/editorDiagnostics.ts",
+    "src/diagnostics/index.ts",
     "src/shared/**/*",
     "src/webview/**/*",
     "src/pattern-domain/**/*",

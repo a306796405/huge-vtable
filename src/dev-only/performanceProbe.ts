@@ -98,7 +98,7 @@ export function installPatternPerformanceProbe(
       ),
     onDidChangeDocumentState:
       client.onDidChangeDocumentState?.bind(client),
-    reportClientLog: client.reportClientLog?.bind(client),
+    reportDiagnostic: client.reportDiagnostic?.bind(client),
     dispose() {
       probe.dispose();
       client.dispose?.();
