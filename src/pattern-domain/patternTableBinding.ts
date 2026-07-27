@@ -1,7 +1,7 @@
 /**
  * 阅读等级：A 业务必读
  * 是否迁移：按真实 Pattern 字段调整
- * 前置阅读：shared/protocol.ts、core/vtableAdapter.ts
+ * 前置阅读：shared/protocol.ts、pattern-large-data-vtable/vtableAdapter.ts
  * 建议只关注：列定义、字段映射和乐观单元格回退
  * 可以跳过：无
  *
@@ -14,7 +14,7 @@ import { InputEditor } from "@visactor/vtable-editors";
 import type {
   TableField,
   VTableAdapter
-} from "../core/vtableAdapter";
+} from "../pattern-large-data-vtable";
 import {
   SIGNAL_IDS,
   isPatternEditableColumnId,

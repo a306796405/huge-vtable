@@ -5,7 +5,7 @@
  * 建议只关注：createScrollGeometry、logicalToScrollbarScrollTop、computeWindowStartVectorIndex
  * 可以跳过：基础 clamp 函数
  *
- * 这里全部是无副作用计算。把“亿级逻辑像素”和“浏览器可承受的滚动像素”
+ * 这里全部是无副作用计算。把 Pattern“亿级逻辑像素”和“浏览器可承受的滚动像素”
  * 分开后，DOM、VTable 和后端都不需要知道总数据对应几十亿像素。
  */
 

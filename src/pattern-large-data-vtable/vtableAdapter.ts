@@ -1,7 +1,7 @@
 /**
  * 阅读等级：B 接口必读
  * 是否迁移：是
- * 前置阅读：core/logicalViewportMath.ts
+ * 前置阅读：pattern-large-data-vtable/logicalViewportMath.ts
  * 建议只关注：VTableAdapter 接口
  * 可以跳过：VTable tableRow 与 recordIndex 的转换
  *

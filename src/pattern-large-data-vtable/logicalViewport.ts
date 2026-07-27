@@ -5,7 +5,7 @@
  * 建议只关注：start、goToVectorIndex、refreshLayout、dispose
  * 可以跳过：滚动事件抑制、缓存淘汰和 rAF 合并
  *
- * 这个 controller 只做四件事：
+ * 这个 Pattern 大数据 controller 只做四件事：
  * 1. 在有限的原生 scrollbar 像素与真实逻辑位置之间映射；
  * 2. 请求前/当前/后三个小窗口；
  * 3. 只把当前窗口交给 VTable；

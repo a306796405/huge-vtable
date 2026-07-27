@@ -11,11 +11,11 @@ import {
   createVTableAdapter,
   VTABLE_HEADER_ROW_HEIGHT,
   type VTableListTableInstance
-} from "../core/vtableAdapter";
+} from "../pattern-large-data-vtable";
 import {
   createDocumentTableOption,
   DocumentTableSurface
-} from "../editor-shell/DocumentTableSurface";
+} from "../pattern-large-data-vtable";
 import {
   createPatternColumns,
   type PatternTableAdapter

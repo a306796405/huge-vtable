@@ -12,9 +12,10 @@
     "skipLibCheck": true
   },
   "include": [
-    "src/core/**/*",
+    "src/pattern-large-data-vtable/**/*",
     "src/shared/**/*",
     "src/webview/**/*",
+    "src/pattern-domain/**/*",
     "src/dev-only/**/*"
   ],
   "exclude": [

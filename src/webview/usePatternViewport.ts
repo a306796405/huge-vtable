@@ -24,12 +24,12 @@ import {
   LogicalViewport,
   type LogicalViewportState,
   type ViewportSnapshot
-} from "../core/logicalViewport";
+} from "../pattern-large-data-vtable";
 import {
   type TableCellEditEvent,
   type TableContextMenuEvent,
   type TablePasteEvent
-} from "../core/vtableAdapter";
+} from "../pattern-large-data-vtable";
 import {
   replacePatternCellValue,
   toPatternEditableColumnId,

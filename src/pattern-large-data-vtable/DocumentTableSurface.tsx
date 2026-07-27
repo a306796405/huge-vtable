@@ -1,7 +1,7 @@
 /**
  * 阅读等级：B 接口必读
  * 是否迁移：是
- * 前置阅读：core/vtableAdapter.ts
+ * 前置阅读：pattern-large-data-vtable/vtableAdapter.ts
  * 建议只关注：DocumentTableSurface props 和 createDocumentTableOption
  * 可以跳过：React-VTable memo 薄封装
  *
@@ -24,7 +24,7 @@ import {
   VTABLE_HEADER_ROW_HEIGHT,
   VTABLE_HORIZONTAL_SCROLLBAR_HEIGHT,
   type VTableListTableInstance
-} from "../core/vtableAdapter";
+} from "./vtableAdapter";
 
 export type DocumentTableSurfaceProps = {
   option: ListTableConstructorOptions;
