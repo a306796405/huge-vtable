@@ -31,7 +31,10 @@ type PendingRequest = {
   command: PatternCommand;
   resolve(value: unknown): void;
   reject(error: Error): void;
+  timeoutId?: number;
 };
+
+const SAFE_READ_TIMEOUT_MS = 15_000;
 
 export class PatternRequestFailedError extends Error {
   constructor(
@@ -75,6 +78,9 @@ export function createVsCodePatternClient(): PatternDocumentClient {
 
     const request = pending.get(message.id)!;
     pending.delete(message.id);
+    if (request.timeoutId !== undefined) {
+      window.clearTimeout(request.timeoutId);
+    }
 
     if (message.ok) {
       request.resolve(message.payload);
@@ -107,11 +113,28 @@ export function createVsCodePatternClient(): PatternDocumentClient {
         payload
       };
 
-      pending.set(id, {
+      const pendingRequest: PendingRequest = {
         command,
         resolve: value => resolve(value as T),
         reject
-      });
+      };
+
+      if (command === "getMetadata" || command === "getWindow") {
+        pendingRequest.timeoutId = window.setTimeout(() => {
+          if (pending.get(id) !== pendingRequest) {
+            return;
+          }
+
+          pending.delete(id);
+          reject(
+            new Error(
+              `${command} timed out after ${SAFE_READ_TIMEOUT_MS} ms.`
+            )
+          );
+        }, SAFE_READ_TIMEOUT_MS);
+      }
+
+      pending.set(id, pendingRequest);
       vscode.postMessage(message);
     });
   }
@@ -154,6 +177,9 @@ export function createVsCodePatternClient(): PatternDocumentClient {
       window.removeEventListener("message", handleMessage);
 
       for (const request of pending.values()) {
+        if (request.timeoutId !== undefined) {
+          window.clearTimeout(request.timeoutId);
+        }
         request.reject(
           new Error("Pattern read client was disposed.")
         );

@@ -402,6 +402,7 @@ export class LogicalViewport {
 
     const selection = this.options.table.captureSelection();
     this.options.table.setRecords(current.rows);
+    this.applyLocalScroll();
     await this.options.table.whenLayoutReady();
     this.applyLocalScroll();
     this.options.table.restoreSelection(selection);
@@ -499,7 +500,13 @@ export class LogicalViewport {
         response.revision !== options.revision ||
         response.totalVectors !== options.totalVectors ||
         response.startVectorIndex !==
-          targetWindowStartVectorIndex
+          targetWindowStartVectorIndex ||
+        response.rows.length !==
+          Math.min(
+            this.windowSize,
+            options.totalVectors -
+              targetWindowStartVectorIndex
+          )
       ) {
         throw new Error(
           "Replacement window does not match the committed dataset."
@@ -515,6 +522,15 @@ export class LogicalViewport {
       );
       const selection = this.options.table.captureSelection();
       this.options.table.setRecords(response.rows);
+      this.applyTableScrollForRender({
+        renderStartVectorIndex: response.startVectorIndex,
+        renderLength: response.rows.length,
+        logicalScrollTopPx: nextLogicalScrollTopPx,
+        totalVectors: options.totalVectors
+      });
+      this.options.table.setScrollLeft(
+        snapshot.horizontalScrollLeftPx
+      );
       await this.options.table.whenLayoutReady();
 
       if (this.disposed || switchId !== this.activeSwitchId) {
@@ -844,6 +860,12 @@ export class LogicalViewport {
       );
       const selection = this.options.table.captureSelection();
       this.options.table.setRecords(response.rows);
+      this.applyTableScrollForRender({
+        renderStartVectorIndex: response.startVectorIndex,
+        renderLength: response.rows.length,
+        logicalScrollTopPx: this.logicalScrollTopPx,
+        totalVectors: this.totalVectors
+      });
       await this.options.table.whenLayoutReady();
 
       if (this.disposed || switchId !== this.activeSwitchId) {
@@ -963,6 +985,17 @@ export class LogicalViewport {
     if (response.rows.length > this.windowSize) {
       throw new Error("Backend returned more than one render window.");
     }
+
+    const expectedLength = Math.min(
+      this.windowSize,
+      this.totalVectors - requestedStartVectorIndex
+    );
+
+    if (response.rows.length !== expectedLength) {
+      throw new Error(
+        `Window contains ${response.rows.length} rows; expected ${expectedLength}.`
+      );
+    }
   }
 
   private applyLocalScroll(): void {
@@ -973,21 +1006,45 @@ export class LogicalViewport {
       return;
     }
 
+    this.applyTableScrollForRender({
+      renderStartVectorIndex:
+        this.currentRenderStartVectorIndex,
+      renderLength:
+        this.currentRenderHeightPx / this.rowHeightPx,
+      logicalScrollTopPx: this.logicalScrollTopPx,
+      totalVectors: this.totalVectors
+    });
+  }
+
+  private applyTableScrollForRender(options: {
+    renderStartVectorIndex: number;
+    renderLength: number;
+    logicalScrollTopPx: number;
+    totalVectors: number;
+  }): void {
+    const maxLogicalScrollTopPx = Math.max(
+      0,
+      options.totalVectors * this.rowHeightPx -
+        this.geometry.bodyViewportHeightPx
+    );
+    const safeLogicalScrollTopPx = clampNumber(
+      options.logicalScrollTopPx,
+      0,
+      maxLogicalScrollTopPx
+    );
     const maxLocalScrollTopPx = Math.max(
       0,
-      this.currentRenderHeightPx -
+      options.renderLength * this.rowHeightPx -
         this.geometry.bodyViewportHeightPx
     );
     const localScrollTopPx = clampNumber(
-      this.logicalScrollTopPx -
-        this.currentRenderStartVectorIndex *
-          this.rowHeightPx,
+      safeLogicalScrollTopPx -
+        options.renderStartVectorIndex * this.rowHeightPx,
       0,
       maxLocalScrollTopPx
     );
     const isAtDatasetEnd =
-      this.logicalScrollTopPx >=
-      this.geometry.maxLogicalScrollTopPx - 0.5;
+      safeLogicalScrollTopPx >= maxLogicalScrollTopPx - 0.5;
     /*
      * 到达整个数据集末尾时，直接把一个极大值交给 VTable，由其按照
      * 当前真实 records/body 高度钳位到内部最大 scrollTop。这样最后一行

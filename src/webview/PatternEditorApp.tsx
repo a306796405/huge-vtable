@@ -131,7 +131,7 @@ export function PatternEditorApp({
       <footer
         className={
           controller.state.errorMessage ||
-          controller.isSyncBlocked
+          controller.isRecovering
             ? "status-bar has-error"
             : "status-bar"
         }
@@ -156,18 +156,8 @@ export function PatternEditorApp({
               controller.state.windowEndVectorIndex
             )} · cache ${controller.state.cacheEntries}/3`}
         </span>
-        {controller.isSyncBlocked ? (
-          <button
-            type="button"
-            className="status-retry"
-            onClick={() => void controller.retrySync()}
-          >
-            重新同步
-          </button>
-        ) : null}
         {controller.state.isLoading ||
-        (controller.isMutating &&
-          !controller.isSyncBlocked) ? (
+        controller.isMutating ? (
           <span className="status-loading">Loading…</span>
         ) : null}
       </footer>

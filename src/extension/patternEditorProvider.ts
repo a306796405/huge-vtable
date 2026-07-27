@@ -252,14 +252,13 @@ export class PatternEditorProvider
           const result = await document.backend.applyMutation(
             message.payload as PatternMutationRequest
           );
-          await respond(webview, {
-            kind: "response",
-            id: message.id,
-            ok: true,
-            payload: result
-          });
 
           if (result.revision !== result.previousRevision) {
+            /*
+             * 后端提交成功后先登记 VS Code 历史，再回复 Webview。即使回复
+             * 通道随后失败，这次写入仍可 Undo，前端则通过只读恢复确认
+             * 权威 revision；绝不重新发送同一 mutation。
+             */
             this.changeEmitter.fire({
               document,
               label: result.message,
@@ -277,6 +276,13 @@ export class PatternEditorProvider
               }
             });
           }
+
+          await respond(webview, {
+            kind: "response",
+            id: message.id,
+            ok: true,
+            payload: result
+          });
 
           return;
         }
@@ -307,9 +313,22 @@ export class PatternEditorProvider
         }
       }
     } catch (error) {
+      let currentRevision = 0;
+
+      try {
+        currentRevision = (
+          await document.backend.getMetadata()
+        ).revision;
+      } catch (metadataError) {
+        this.output.error(
+          `[request:${message.id}] failed to read metadata after ${message.command} error`,
+          metadataError
+        );
+      }
+
       const responseError = toPatternRequestError(
         error,
-        (await document.backend.getMetadata()).revision
+        currentRevision
       );
 
       this.output.error(
