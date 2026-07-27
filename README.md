@@ -16,9 +16,9 @@
 - Cmd/Ctrl+A、C、V 可在 VS Code Webview 中工作。
 - VS Code CustomDocumentEditEvent Undo/Redo。
 - dirty、Save、Save As、Backup 和 Revert。
-- mutation 后视口锚定和横向位置恢复。
+- mutation 后保持用户当前看到的数据并恢复横向位置。
 - staged replacement：新窗口准备好前保留旧 Canvas。
-- 统一错误 ID、LogOutputChannel、single-flight 权威恢复和“重新同步”。
+- 独立 diagnostics、LogOutputChannel 和 single-flight 自动权威恢复。
 - 同一 `.pat` 文档只允许一个 Pattern Editor。
 
 ## 当前边界
@@ -105,7 +105,8 @@ pnpm build:extension
 - [功能、快捷键和生命周期](./MANUAL_TEST_GUIDE.md)
 - [1 亿行性能与内存](./docs/acceptance/PERFORMANCE_ACCEPTANCE_GUIDE.md)
 - [验收数据](./examples/acceptance/README.md)
-- [宣讲用 Markdown 技术方案](./docs/v22-lite-markdown-technical-solution.md)
+- [面向领导和所有后端的改造说明](./docs/pattern-large-data-refactor-overview.md)
+- [前端与对接后端技术方案](./docs/v22-lite-markdown-technical-solution.md)
 
 ## 推荐阅读顺序
 
@@ -122,10 +123,12 @@ pnpm build:extension
 
 稳定核心通常只需理解接口：
 
-9. `src/editor-shell/DocumentTableSurface.tsx`。
-10. `src/core/vtableAdapter.ts`。
-11. `src/core/logicalViewport.ts`。
-12. `src/core/logicalViewportMath.ts`。
+9. `src/pattern-large-data-vtable/index.ts`：稳定迁移入口。
+10. `src/pattern-large-data-vtable/DocumentTableSurface.tsx`。
+11. `src/pattern-large-data-vtable/vtableAdapter.ts`。
+12. `src/pattern-large-data-vtable/logicalViewport.ts`。
+13. `src/pattern-large-data-vtable/logicalViewportMath.ts`。
+14. `src/diagnostics/index.ts`：独立诊断入口。
 
 `src/dev-only`、`examples/acceptance` 和性能探针只用于学习与验证，不迁移到
 真实 Pattern Webview。尤其不要从 runtime 内部开始阅读。
