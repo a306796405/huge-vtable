@@ -26,6 +26,7 @@ export {
   type TableField,
   type TablePasteEvent,
   type TableRow,
+  type TableSelection,
   type VTableAdapter,
   type VTableAdapterOptions,
   type VTableListTableInstance

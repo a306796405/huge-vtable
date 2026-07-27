@@ -277,6 +277,7 @@ export class LogicalViewport {
   private resizeRafId = 0;
   private expectedScrollbarScrollTopPx: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private stopObservingTableScroll: (() => void) | null = null;
 
   constructor(private readonly options: LogicalViewportOptions) {
     this.rowHeightPx =
@@ -399,9 +400,11 @@ export class LogicalViewport {
       );
     }
 
+    const selection = this.options.table.captureSelection();
     this.options.table.setRecords(current.rows);
     await this.options.table.whenLayoutReady();
     this.applyLocalScroll();
+    this.options.table.restoreSelection(selection);
     this.emitState();
   }
 
@@ -412,8 +415,10 @@ export class LogicalViewport {
     );
 
     if (current) {
+      const selection = this.options.table.captureSelection();
       this.options.table.setRecords(current.rows);
       this.applyLocalScroll();
+      this.options.table.restoreSelection(selection);
     }
   }
 
@@ -508,6 +513,7 @@ export class LogicalViewport {
         `${this.revision}:${response.startVectorIndex}`,
         response
       );
+      const selection = this.options.table.captureSelection();
       this.options.table.setRecords(response.rows);
       await this.options.table.whenLayoutReady();
 
@@ -534,6 +540,7 @@ export class LogicalViewport {
       this.options.table.setScrollLeft(
         snapshot.horizontalScrollLeftPx
       );
+      this.options.table.restoreSelection(selection);
       this.isLoading = false;
       this.prepareAndPrefetch(response.startVectorIndex);
       this.emitState();
@@ -555,6 +562,8 @@ export class LogicalViewport {
     this.cache.clear();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.stopObservingTableScroll?.();
+    this.stopObservingTableScroll = null;
     this.options.scrollElement.removeEventListener(
       "scroll",
       this.handleOuterScroll
@@ -566,7 +575,8 @@ export class LogicalViewport {
     );
     this.options.interactionElement.removeEventListener(
       "keydown",
-      this.handleKeyDown
+      this.handleKeyDown,
+      true
     );
 
     for (const rafId of [
@@ -593,8 +603,13 @@ export class LogicalViewport {
     );
     this.options.interactionElement.addEventListener(
       "keydown",
-      this.handleKeyDown
+      this.handleKeyDown,
+      true
     );
+    this.stopObservingTableScroll =
+      this.options.table.observeVerticalScroll(
+        this.handleTableVerticalScroll
+      );
     this.resizeObserver = new ResizeObserver(() => {
       if (this.resizeRafId !== 0) {
         return;
@@ -691,14 +706,6 @@ export class LogicalViewport {
     let nextLogicalScrollTopPx: number | null = null;
 
     switch (event.key) {
-      case "ArrowDown":
-        nextLogicalScrollTopPx =
-          this.logicalScrollTopPx + this.rowHeightPx;
-        break;
-      case "ArrowUp":
-        nextLogicalScrollTopPx =
-          this.logicalScrollTopPx - this.rowHeightPx;
-        break;
       case "PageDown":
         nextLogicalScrollTopPx =
           this.logicalScrollTopPx +
@@ -721,6 +728,43 @@ export class LogicalViewport {
     }
 
     event.preventDefault();
+    this.setLogicalScrollTopPx(
+      nextLogicalScrollTopPx,
+      true
+    );
+    this.scheduleSync();
+  };
+
+  private readonly handleTableVerticalScroll = (
+    localScrollTopPx: number
+  ): void => {
+    if (
+      this.disposed ||
+      this.currentRenderStartVectorIndex < 0
+    ) {
+      return;
+    }
+
+    /*
+     * ArrowUp/ArrowDown 由 VTable 负责移动选区。只要选中单元格仍在可见
+     * 区域内，VTable 的 scrollTop 不变，外层 scrollbar 也保持不动。
+     * 选区越过上下边缘后，公开 SCROLL 事件带来的窗口内位置在这里换算为
+     * 全局逻辑位置；这和鼠标滚轮、Go To 共用同一套窗口切换语义。
+     */
+    const nextLogicalScrollTopPx =
+      this.currentRenderStartVectorIndex *
+        this.rowHeightPx +
+      localScrollTopPx;
+
+    if (
+      Math.abs(
+        nextLogicalScrollTopPx -
+          this.logicalScrollTopPx
+      ) < 0.5
+    ) {
+      return;
+    }
+
     this.setLogicalScrollTopPx(
       nextLogicalScrollTopPx,
       true
@@ -798,6 +842,7 @@ export class LogicalViewport {
         response,
         windowStartVectorIndex
       );
+      const selection = this.options.table.captureSelection();
       this.options.table.setRecords(response.rows);
       await this.options.table.whenLayoutReady();
 
@@ -815,6 +860,7 @@ export class LogicalViewport {
       this.geometry = this.measureGeometry();
       this.updateSpacer();
       this.applyLocalScroll();
+      this.options.table.restoreSelection(selection);
       this.isLoading = false;
       this.errorMessage = null;
       this.prepareAndPrefetch(response.startVectorIndex);

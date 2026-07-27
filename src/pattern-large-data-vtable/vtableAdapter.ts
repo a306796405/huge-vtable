@@ -46,6 +46,16 @@ export interface VTableAdapter<Row extends TableRow> {
   getBodyHeight(): number;
   getVisibleRecordRange(): { start: number; end: number } | null;
   getElement(): HTMLElement;
+  /**
+   * 监听 VTable 自身纵向位置变化。键盘选区越过可见边缘时，VTable 会先
+   * 滚动当前窗口；runtime 通过这个公开事件把局部位置同步为全局位置。
+   * adapter 会过滤由 setRecords/setScrollTop/restoreSelection 引起的事件。
+   */
+  observeVerticalScroll(
+    listener: (scrollTop: number) => void
+  ): () => void;
+  captureSelection(): TableSelection | null;
+  restoreSelection(selection: TableSelection | null): boolean;
   observeCellEdits(
     listener: (event: TableCellEditEvent<Row>) => void
   ): () => void;
@@ -83,15 +93,47 @@ export type TablePasteEvent<Row extends TableRow> = {
   clipboardText: string;
 };
 
+export type TableSelection = {
+  rowKey: string;
+  columnIndex: number;
+};
+
 export function createVTableAdapter<Row extends TableRow>(
   table: VTableListTableInstance,
   options: VTableAdapterOptions = {}
 ): VTableAdapter<Row> {
+  let records: Row[] = [];
+  let suppressScrollEvents = false;
+  let releaseScrollSuppressionFrame = 0;
+
+  const suppressProgrammaticScroll = () => {
+    suppressScrollEvents = true;
+
+    if (releaseScrollSuppressionFrame !== 0) {
+      cancelAnimationFrame(releaseScrollSuppressionFrame);
+    }
+
+    /*
+     * VTable 的 scroll 事件可能在 imperative 调用后的布局帧才派发。
+     * 等两帧再恢复用户事件，避免 setRecords → scroll → runtime →
+     * setScrollTop 的反馈循环。
+     */
+    releaseScrollSuppressionFrame = requestAnimationFrame(() => {
+      releaseScrollSuppressionFrame = requestAnimationFrame(() => {
+        releaseScrollSuppressionFrame = 0;
+        suppressScrollEvents = false;
+      });
+    });
+  };
+
   return {
     setRecords(rows) {
+      suppressProgrammaticScroll();
+      records = rows;
       table.setRecords(rows, { sortState: null });
     },
     setScrollTop(scrollTop) {
+      suppressProgrammaticScroll();
       table.setScrollTop(scrollTop);
     },
     getScrollTop() {
@@ -179,6 +221,52 @@ export function createVTableAdapter<Row extends TableRow>(
     },
     getElement() {
       return table.getElement();
+    },
+    observeVerticalScroll(listener) {
+      const listenerId = table.on("scroll", () => {
+        if (!suppressScrollEvents) {
+          listener(table.getScrollTop());
+        }
+      });
+
+      return () => table.off(listenerId);
+    },
+    captureSelection() {
+      const range = table.getSelectedCellRanges().at(-1);
+
+      if (!range) {
+        return null;
+      }
+
+      const columnIndex = range.end.col;
+      const record = table.getCellOriginRecord(
+        columnIndex,
+        range.end.row
+      ) as Row | undefined;
+
+      return record
+        ? { rowKey: record.rowKey, columnIndex }
+        : null;
+    },
+    restoreSelection(selection) {
+      if (!selection) {
+        return false;
+      }
+
+      const recordIndex = records.findIndex(
+        row => row.rowKey === selection.rowKey
+      );
+
+      if (recordIndex < 0) {
+        return false;
+      }
+
+      suppressProgrammaticScroll();
+      table.selectCell(
+        selection.columnIndex,
+        table.columnHeaderLevelCount + recordIndex
+      );
+      return true;
     },
     observeCellEdits(listener) {
       const listenerId = table.on(
