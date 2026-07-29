@@ -24,7 +24,7 @@ git show 5b27503
 - `logicalViewport.ts` 和 `usePatternViewport.ts` 用于 staged reload、视口
   补偿、局部更新、统一日志和权威失败恢复。
 - Editable Custom Editor 的 Save、Save As、Backup、Revert 生命周期不能由
-  浏览器 Demo 代替。
+  普通网页代替。
 - VS Code Clipboard 和 CustomDocumentEditEvent 历史需要插件宿主协作。
 
 因此没有为了压缩物理行数删除事务校验或把逻辑重新糅进 React 组件。通用
@@ -48,8 +48,7 @@ Surface/adapter、Pattern binding、controller 和参考 backend 仍保持清楚
 | --- | --- | --- |
 | `src/webview/clipboardTsv.ts` | 剪贴板 TSV 解析 | 是 |
 | `src/dev-only/syntheticPatternStore.ts` | 亿级 synthetic 的稀疏可编辑存储 | 否，C++ 替换 |
-| `src/dev-only/performanceProbe.ts` | 浏览器性能采样 | 否 |
-| `MANUAL_TEST_GUIDE.md` | 浏览器与插件手工验收 | 按需 |
+| `MANUAL_TEST_GUIDE.md` | 插件手工验收 | 按需 |
 | `CHANGES_FROM_READONLY.md` | 分阶段代码对比 | 否 |
 
 ## 主要修改文件

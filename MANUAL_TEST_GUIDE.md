@@ -1,8 +1,7 @@
 # v22-lite VS Code 人工验收指南
 
 本指南由项目提供测试数据、操作场景和通过标准，最终结果由验收人填写。
-它验证的是 VS Code Custom Editor 产品入口；浏览器页面只用于快速定位布局
-问题，不能代替插件验收。
+它只验证 VS Code Custom Editor 产品入口。
 
 本轮不要求新增或运行单元测试。修改代码后只检查：
 
@@ -89,7 +88,7 @@ VS Code zoom：
 
 通过标准：
 
-- 可编辑列提交后保持新值，状态栏出现 `Modified`。
+- 可编辑列提交后保持新值，VS Code 标签页出现 dirty 圆点。
 - 每次编辑只对应一次历史操作。
 - Vector、Cycle 不进入编辑。
 - 编辑框中的方向键、Home、End 不触发表格滚动。
@@ -111,7 +110,7 @@ VS Code zoom：
 
 ## 4. VS Code Clipboard
 
-本节必须在 Extension Development Host 中执行，不能只在普通浏览器执行。
+本节必须在 Extension Development Host 中执行。
 
 ### 场景 4.1：Cmd/Ctrl+A 和 Copy
 

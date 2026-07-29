@@ -152,7 +152,7 @@ export interface PatternDocumentClient {
   ): () => void;
   /**
    * Webview 只上报诊断上下文，不上报行、单元格或剪贴板内容。
-   * 浏览器 Demo 可以不实现；VS Code client 会转发到 LogOutputChannel。
+   * VS Code client 会把安全上下文转发到 LogOutputChannel。
    */
   reportDiagnostic?(entry: EditorDiagnosticEntry): void;
   dispose?(): void;
