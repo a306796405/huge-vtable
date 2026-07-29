@@ -14,11 +14,11 @@
 - Insert、Delete、Update、Paste 共用一个 `applyMutation()`。
 - Paste 在一次事务中同时更新已有行并在末尾越界新增。
 - Cmd/Ctrl+A、C、V 可在 VS Code Webview 中工作。
-- VS Code CustomDocumentEditEvent Undo/Redo。
-- VS Code dirty 标记、Save、Save As、Backup 和 Revert。
-- mutation 后保持用户当前看到的数据并恢复横向位置。
+- VS Code 原生 Undo/Redo；Extension 为每次成功操作登记一条历史。
+- VS Code 未保存标记、Save、Save As、Reload 和关闭提示。
+- 结构 mutation 后保持原逻辑位置并恢复横向位置。
 - staged replacement：新窗口准备好前保留旧 Canvas。
-- 独立 diagnostics、LogOutputChannel 和 single-flight 自动权威恢复。
+- 独立 diagnostics、LogOutputChannel 和 single-flight 自动恢复。
 - 同一 `.pat` 文档只允许一个 Pattern Editor。
 
 ## 当前边界
@@ -28,6 +28,7 @@
 - 真实产品由 C++ ICE 实现 `PatternBackend`。
 - 当前列固定为 12 个 Signal，不能代表真实最大列数。
 - synthetic Undo/Redo 使用参考快照，真实历史上限和内存策略由 C++ 决定。
+- 当前不支持 VS Code Hot Exit Backup，异常退出时未保存修改可能丢失。
 - 本版不实现 Cycle 重算、Find/Replace、Failure、错误轨、Annotation、
   Sync Marker 或修改角标。
 
@@ -48,10 +49,10 @@ flowchart LR
 - React state 不保存窗口 rows。
 - runtime 最多缓存三个窗口，VTable 只渲染其中一个。
 - `rowKey` 是会话内 opaque 稳定身份，前端不得解析。
-- revision、mutation 和 Undo/Redo 的真实数据都在 backend，dirty 状态由
-  VS Code Custom Editor 管理。
+- revision、mutation 和 Undo/Redo 的真实数据都在 backend，标签页未保存状态
+  由 VS Code Custom Editor 管理。
 - adapter 不导入 Pattern 字段或业务 operation。
-- 无法确认写结果时不重试 mutation，只读取 metadata 和权威窗口。
+- 无法确认写结果时不重试 mutation；生产方案使用 `mutationId` 查询状态。
 
 ## 缓存
 
@@ -66,8 +67,9 @@ cacheWindowLimit = 3
 
 缓存 key 是 `revision:windowStartVectorIndex`。相同 key 的 pending 请求复用
 Promise；活跃缓存硬上限为前窗、当前窗、后窗三个 entry。结构 mutation 和
-批量 Paste 读取新 revision 的权威窗口；单行编辑优先原子迁移重叠缓存，失败
-时回退到 staged 权威同步。React state 只接收状态摘要。
+批量 Paste 读取新 revision 的当前页；单行编辑优先替换重叠缓存中的同一
+`rowKey`，失败时重新读取最新文档基本信息和当前页。React state 只接收状态
+摘要。
 
 ## 运行和构建
 
@@ -99,13 +101,13 @@ pnpm build:extension
 业务迁移按顺序阅读：
 
 1. `src/shared/protocol.ts`：行模型、revision、统一 mutation。
-2. `src/extension/patternBackend.ts`：未来 C++ ICE 实现合同。
+2. `src/extension/patternBackend.ts`：未来 C++ ICE 接口边界。
 3. `src/pattern-domain/patternTableBinding.ts`：Pattern 列与通用表格映射。
 4. `src/webview/patternReadClient.ts`：Webview 请求桥。
 5. `src/webview/usePatternViewport.ts`：业务 controller、mutation 和恢复。
 6. `src/webview/PatternTable.tsx`：Pattern 配置注入公共 Surface。
 7. `src/webview/PatternEditorApp.tsx`：插件页面装配。
-8. `src/extension/patternEditorProvider.ts`：请求路由和文件生命周期。
+8. `src/extension/patternEditorProvider.ts`：请求转发和文件生命周期。
 
 稳定核心通常只需理解接口：
 
