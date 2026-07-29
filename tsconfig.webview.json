@@ -17,8 +17,7 @@
     "src/diagnostics/index.ts",
     "src/shared/**/*",
     "src/webview/**/*",
-    "src/pattern-domain/**/*",
-    "src/dev-only/**/*"
+    "src/pattern-domain/**/*"
   ],
   "exclude": [
     "src/extension.ts",

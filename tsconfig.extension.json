@@ -20,7 +20,6 @@
   ],
   "exclude": [
     "src/pattern-large-data-vtable/**/*",
-    "src/webview/**/*",
-    "src/dev-only/browserMain.tsx"
+    "src/webview/**/*"
   ]
 }
