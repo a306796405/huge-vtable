@@ -159,7 +159,7 @@ export interface PatternDocumentClient {
 }
 
 export type PatternDocumentStateEvent = {
-  action: "reverted" | "undone" | "redone";
+  action: "reloaded" | "undone" | "redone";
   metadata: PatternMetadata;
   effects?: PatternMutationEffect[];
   message?: string;

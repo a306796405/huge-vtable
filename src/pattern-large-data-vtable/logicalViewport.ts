@@ -14,7 +14,6 @@
 
 import {
   type PatternDocumentClient,
-  type PatternMutationEffect,
   type PatternRenderRow,
   type PatternWindowResponse
 } from "../shared/protocol";
@@ -422,8 +421,8 @@ export class LogicalViewport {
   async replaceDataset(options: {
     totalVectors: number;
     revision: number;
-    effects?: PatternMutationEffect[];
     snapshot?: ViewportSnapshot;
+    selectionPolicy?: "preserve" | "clear";
   }): Promise<void> {
     if (this.disposed) {
       return;
@@ -432,10 +431,13 @@ export class LogicalViewport {
     const switchId = ++this.activeSwitchId;
     const snapshot =
       options.snapshot ?? this.captureViewportSnapshot();
-    const targetVectorIndex = mapVectorIndexAfterEffects(
-      snapshot.firstVisibleVectorIndex,
-      options.effects ?? []
-    );
+    /*
+     * 结构修改后仍读取原来的逻辑位置。例如首行是 100，在它前方插入
+     * 3 行后仍读取 100，原来首行的数据会自然下移到 103。这里不根据
+     * effects 追踪原 rowKey，避免把“保持位置”误写成“保持同一条数据”。
+     */
+    const targetVectorIndex =
+      snapshot.firstVisibleVectorIndex;
     const safeTargetVectorIndex =
       options.totalVectors > 0
         ? clampGoToVectorIndex(
@@ -463,6 +465,7 @@ export class LogicalViewport {
         this.logicalScrollTopPx = 0;
         this.options.table.setRecords([]);
         await this.options.table.whenLayoutReady();
+        this.options.table.clearSelection();
         this.geometry = this.measureGeometry();
         this.updateSpacer();
         this.writeOuterScroll();
@@ -516,7 +519,10 @@ export class LogicalViewport {
         `${this.revision}:${response.startVectorIndex}`,
         response
       );
-      const selection = this.options.table.captureSelection();
+      const selection =
+        options.selectionPolicy === "clear"
+          ? null
+          : this.options.table.captureSelection();
       this.options.table.setRecords(response.rows);
       this.applyTableScrollForRender({
         renderStartVectorIndex: response.startVectorIndex,
@@ -552,7 +558,11 @@ export class LogicalViewport {
       this.options.table.setScrollLeft(
         snapshot.horizontalScrollLeftPx
       );
-      this.options.table.restoreSelection(selection);
+      if (options.selectionPolicy === "clear") {
+        this.options.table.clearSelection();
+      } else {
+        this.options.table.restoreSelection(selection);
+      }
       this.isLoading = false;
       this.prepareAndPrefetch(response.startVectorIndex);
       this.emitState();
@@ -1175,45 +1185,4 @@ function isTextEditingTarget(target: EventTarget | null): boolean {
     target instanceof HTMLTextAreaElement ||
     (target instanceof HTMLElement && target.isContentEditable)
   );
-}
-
-function mapVectorIndexAfterEffects(
-  originalVectorIndex: number,
-  effects: readonly PatternMutationEffect[]
-): number {
-  let mappedVectorIndex = originalVectorIndex;
-  let accumulatedShift = 0;
-
-  for (const effect of effects) {
-    if (effect.kind === "cellsUpdated") {
-      continue;
-    }
-
-    const currentStartVectorIndex =
-      effect.startVectorIndex + accumulatedShift;
-
-    if (effect.kind === "rowsInserted") {
-      if (currentStartVectorIndex <= mappedVectorIndex) {
-        mappedVectorIndex += effect.count;
-      }
-
-      accumulatedShift += effect.count;
-      continue;
-    }
-
-    const currentEndVectorIndex =
-      currentStartVectorIndex + effect.count;
-
-    if (mappedVectorIndex >= currentEndVectorIndex) {
-      mappedVectorIndex -= effect.count;
-    } else if (
-      mappedVectorIndex >= currentStartVectorIndex
-    ) {
-      mappedVectorIndex = currentStartVectorIndex;
-    }
-
-    accumulatedShift -= effect.count;
-  }
-
-  return Math.max(0, mappedVectorIndex);
 }

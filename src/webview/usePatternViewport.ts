@@ -44,6 +44,7 @@ import {
 import type {
   PatternDocumentClient,
   PatternMetadata,
+  PatternMutationEffect,
   PatternMutationOperation,
   PatternRequestError,
   PatternRenderRow
@@ -194,7 +195,9 @@ export function usePatternViewport(client: PatternDocumentClient) {
 
       recoveryStateRef.current = "recovering";
       setIsRecovering(true);
-      setActionMessage("正在自动恢复权威数据，恢复完成前已暂停写入。");
+      setActionMessage(
+        "正在重新读取 ICE Server 的最新数据，完成前已暂停写入。"
+      );
 
       const recovery = (async () => {
         let failedAttempts = 0;
@@ -230,7 +233,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
             recoveryStateRef.current = "healthy";
             setIsRecovering(false);
             setActionMessage(
-              `已自动恢复权威数据（错误 ID：${options.errorId}）。`
+              `已恢复到 ICE Server 的最新数据（错误 ID：${options.errorId}）。`
             );
             diagnostics.recovered({
               correlationId: options.errorId,
@@ -438,14 +441,18 @@ export function usePatternViewport(client: PatternDocumentClient) {
         .replaceDataset({
           totalVectors: event.metadata.totalVectors,
           revision: event.metadata.revision,
-          effects: event.effects,
-          snapshot
+          snapshot,
+          selectionPolicy:
+            event.action === "reloaded" ||
+            hasStructuralEffects(event.effects)
+              ? "clear"
+              : "preserve"
         })
         .then(() => {
           setActionMessage(
             event.message ??
-              (event.action === "reverted"
-                ? "已从磁盘恢复。"
+              (event.action === "reloaded"
+                ? "已从保存文件重新加载。"
                 : event.action === "undone"
                   ? "已撤销上一项操作。"
                   : "已重做上一项操作。")
@@ -519,7 +526,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
           response.revision !== response.previousRevision;
 
         /*
-         * 后端已经原子提交后，revision 必须立即推进。即使随后本地 Canvas
+         * ICE Server 已整笔提交后，revision 必须立即推进。即使随后本地 Canvas
          * 同步失败，也不能再用旧 revision 发起第二次写操作。
          */
         revisionRef.current = response.revision;
@@ -546,16 +553,19 @@ export function usePatternViewport(client: PatternDocumentClient) {
             await viewport.replaceDataset({
               totalVectors: response.totalVectors,
               revision: response.revision,
-              effects: response.effects,
-              snapshot
+              snapshot,
+              selectionPolicy: "preserve"
             });
           }
         } else if (responseCommitted) {
           await viewport.replaceDataset({
             totalVectors: response.totalVectors,
             revision: response.revision,
-            effects: response.effects,
-            snapshot
+            snapshot,
+            selectionPolicy:
+              operation.kind === "updateCells"
+                ? "preserve"
+                : "clear"
           });
         }
 
@@ -738,6 +748,18 @@ export function usePatternViewport(client: PatternDocumentClient) {
       handleSurfaceContextMenu
     } satisfies PatternTableBindings
   };
+}
+
+function hasStructuralEffects(
+  effects: readonly PatternMutationEffect[] | undefined
+): boolean {
+  return Boolean(
+    effects?.some(
+      effect =>
+        effect.kind === "rowsInserted" ||
+        effect.kind === "rowsDeleted"
+    )
+  );
 }
 
 function handleCellEdit(
