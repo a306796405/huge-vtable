@@ -33,7 +33,5 @@ export interface PatternBackend {
   redo(): PatternHistoryResponse | Promise<PatternHistoryResponse>;
   /** 序列化当前稀疏文档状态；不得展开未修改的亿级基础数据。 */
   serialize(): Uint8Array | Promise<Uint8Array>;
-  /** 仅在宿主确认写盘成功后清除后端 dirty 基线。 */
-  markSaved(): void;
   dispose?(): void;
 }

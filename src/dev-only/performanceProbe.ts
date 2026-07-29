@@ -92,10 +92,6 @@ export function installPatternPerformanceProbe(
       probe.measure("applyMutation", () =>
         client.applyMutation(request)
       ),
-    runHistory: direction =>
-      probe.measure("runHistory", () =>
-        client.runHistory(direction)
-      ),
     onDidChangeDocumentState:
       client.onDidChangeDocumentState?.bind(client),
     reportDiagnostic: client.reportDiagnostic?.bind(client),

@@ -44,9 +44,6 @@ export type PatternRenderRow = {
 export type PatternMetadata = {
   totalVectors: number;
   revision: number;
-  isDirty: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
 };
 
 export type PatternWindowRequest = {
@@ -150,9 +147,6 @@ export interface PatternDocumentClient {
   applyMutation(
     request: PatternMutationRequest
   ): Promise<PatternMutationResponse>;
-  runHistory(
-    direction: PatternHistoryDirection
-  ): Promise<PatternMetadata>;
   onDidChangeDocumentState?(
     listener: (event: PatternDocumentStateEvent) => void
   ): () => void;
@@ -165,7 +159,7 @@ export interface PatternDocumentClient {
 }
 
 export type PatternDocumentStateEvent = {
-  action: "saved" | "reverted" | "undone" | "redone";
+  action: "reverted" | "undone" | "redone";
   metadata: PatternMetadata;
   effects?: PatternMutationEffect[];
   message?: string;
@@ -174,21 +168,18 @@ export type PatternDocumentStateEvent = {
 export type PatternCommand =
   | "getMetadata"
   | "getWindow"
-  | "applyMutation"
-  | "runHistory";
+  | "applyMutation";
 
 export type PatternRequestPayloadMap = {
   getMetadata: undefined;
   getWindow: PatternWindowRequest;
   applyMutation: PatternMutationRequest;
-  runHistory: PatternHistoryDirection;
 };
 
 export type PatternResponsePayloadMap = {
   getMetadata: PatternMetadata;
   getWindow: PatternWindowResponse;
   applyMutation: PatternMutationResponse;
-  runHistory: PatternMetadata;
 };
 
 export type WebviewRequestMessage = {

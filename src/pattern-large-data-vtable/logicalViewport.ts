@@ -188,10 +188,6 @@ export class ReadWindowCache {
       const nextResponse: PatternWindowResponse = {
         ...response,
         revision: nextRevision,
-        isDirty:
-          nextRevision === revision
-            ? response.isDirty
-            : true,
         rows: response.rows.map(
           row => replacements.get(row.rowKey) ?? row
         )

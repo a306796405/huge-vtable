@@ -90,29 +90,6 @@ export function PatternEditorApp({
         >
           Go To
         </button>
-        <span className="toolbar-spacer" />
-        <button
-          type="button"
-          className="secondary"
-          disabled={
-            !controller.canUndo || controller.isMutating
-          }
-          title="Undo (Ctrl/Cmd+Z)"
-          onClick={() => void controller.undo()}
-        >
-          Undo
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={
-            !controller.canRedo || controller.isMutating
-          }
-          title="Redo (Ctrl/Cmd+Shift+Z)"
-          onClick={() => void controller.redo()}
-        >
-          Redo
-        </button>
       </section>
 
       <PatternTable bindings={controller.bindings} />
@@ -142,7 +119,6 @@ export function PatternEditorApp({
           Offset {formatNumber(
             controller.state.firstVisibleVectorIndex
           )}
-          {controller.isDirty ? " · Modified" : ""}
         </span>
         <span className="status-detail">
           {controller.state.errorMessage ??
