@@ -25,12 +25,11 @@
     ]
   },
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
     "build:webview": "tsc --noEmit -p tsconfig.webview.json && vite build",
     "build:extension": "tsc -p tsconfig.extension.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "pnpm build:webview && pnpm build:extension && pnpm test"
+    "build": "pnpm build:webview && pnpm build:extension"
   },
   "dependencies": {
     "@visactor/react-vtable": "1.22.2",

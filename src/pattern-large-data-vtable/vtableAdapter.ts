@@ -56,6 +56,11 @@ export interface VTableAdapter<Row extends TableRow> {
   ): () => void;
   captureSelection(): TableSelection | null;
   restoreSelection(selection: TableSelection | null): boolean;
+  /**
+   * 清除当前单元格或区域选择。结构修改和 Reload 后，原选区可能已经
+   * 指向不同数据，因此由上层按操作语义决定是否调用。
+   */
+  clearSelection(): void;
   observeCellEdits(
     listener: (event: TableCellEditEvent<Row>) => void
   ): () => void;
@@ -267,6 +272,10 @@ export function createVTableAdapter<Row extends TableRow>(
         table.columnHeaderLevelCount + recordIndex
       );
       return true;
+    },
+    clearSelection() {
+      suppressProgrammaticScroll();
+      table.clearSelected();
     },
     observeCellEdits(listener) {
       const listenerId = table.on(

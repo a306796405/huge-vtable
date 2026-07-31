@@ -2,11 +2,12 @@
  * 阅读等级：A 业务必读
  * 是否迁移：是
  * 前置阅读：patternBackend.ts、shared/protocol.ts
- * 建议只关注：请求路由、dirty 事件、Save/Revert/Backup
+ * 建议只关注：请求转发、VS Code 历史、Save 和 Reload
  * 可以跳过：CSP nonce 和 HTML 模板
  *
  * 一个 .pat 只对应一个 PatternEditableDocument 和一个 webview panel。
  * provider 负责 VS Code 文件生命周期，字段校验和事务仍属于 backend。
+ * 本参考实现不支持 Hot Exit Backup，未保存内容应由正常 Save 流程落盘。
  */
 
 import * as vscode from "vscode";
@@ -64,14 +65,9 @@ export class PatternEditorProvider
     openContext: vscode.CustomDocumentOpenContext,
     token: vscode.CancellationToken
   ): Promise<PatternEditableDocument> {
-    const restoredFromBackup = Boolean(openContext.backupId);
     const bytes =
       openContext.untitledDocumentData ??
-      (await vscode.workspace.fs.readFile(
-        openContext.backupId
-          ? vscode.Uri.parse(openContext.backupId)
-          : uri
-      ));
+      (await vscode.workspace.fs.readFile(uri));
 
     if (token.isCancellationRequested) {
       throw new vscode.CancellationError();
@@ -79,9 +75,7 @@ export class PatternEditorProvider
 
     return new PatternEditableDocument(
       uri,
-      SyntheticPatternBackend.fromBytes(bytes, {
-        isDirty: restoredFromBackup
-      })
+      SyntheticPatternBackend.fromBytes(bytes)
     );
   }
 
@@ -127,7 +121,6 @@ export class PatternEditorProvider
     token: vscode.CancellationToken
   ): Promise<void> {
     await this.writeDocument(document, document.uri, token);
-    await this.postDocumentState(document, "saved");
   }
 
   async saveCustomDocumentAs(
@@ -136,7 +129,6 @@ export class PatternEditorProvider
     token: vscode.CancellationToken
   ): Promise<void> {
     await this.writeDocument(document, destination, token);
-    await this.postDocumentState(document, "saved");
   }
 
   async revertCustomDocument(
@@ -152,37 +144,21 @@ export class PatternEditorProvider
     const previousBackend = document.backend;
     document.backend = SyntheticPatternBackend.fromBytes(bytes);
     previousBackend.dispose?.();
-    await this.postDocumentState(document, "reverted");
+    await this.postDocumentState(document, "reloaded");
   }
 
   async backupCustomDocument(
-    document: PatternEditableDocument,
-    context: vscode.CustomDocumentBackupContext,
+    _document: PatternEditableDocument,
+    _context: vscode.CustomDocumentBackupContext,
     token: vscode.CancellationToken
   ): Promise<vscode.CustomDocumentBackup> {
-    const bytes = await document.backend.serialize();
-
     if (token.isCancellationRequested) {
       throw new vscode.CancellationError();
     }
 
-    await vscode.workspace.fs.createDirectory(
-      parentUri(context.destination)
+    throw new Error(
+      "Pattern Editor 暂不支持异常退出备份，请在关闭 VS Code 前保存文件。"
     );
-    await vscode.workspace.fs.writeFile(
-      context.destination,
-      bytes
-    );
-
-    return {
-      id: context.destination.toString(),
-      delete: () => {
-        void vscode.workspace.fs.delete(context.destination).then(
-          () => undefined,
-          () => undefined
-        );
-      }
-    };
   }
 
   dispose(): void {
@@ -201,7 +177,6 @@ export class PatternEditorProvider
     }
 
     await vscode.workspace.fs.writeFile(destination, bytes);
-    document.backend.markSaved();
   }
 
   private async handleMessage(
@@ -257,7 +232,7 @@ export class PatternEditorProvider
             /*
              * 后端提交成功后先登记 VS Code 历史，再回复 Webview。即使回复
              * 通道随后失败，这次写入仍可 Undo，前端则通过只读恢复确认
-             * 权威 revision；绝不重新发送同一 mutation。
+             * ICE Server 的最新 revision；绝不重新发送同一 mutation。
              */
             this.changeEmitter.fire({
               document,
@@ -284,31 +259,6 @@ export class PatternEditorProvider
             payload: result
           });
 
-          return;
-        }
-        case "runHistory": {
-          if (
-            message.payload !== "undo" &&
-            message.payload !== "redo"
-          ) {
-            throw new RangeError(
-              "runHistory payload must be undo or redo."
-            );
-          }
-
-          /*
-           * 工具栏也走 VS Code 原生命令，让它和 Cmd/Ctrl+Z 共用同一条
-           * CustomDocumentEditEvent 历史链，避免 Webview 自建第二套栈。
-           */
-          await vscode.commands.executeCommand(
-            message.payload as PatternHistoryDirection
-          );
-          await respond(webview, {
-            kind: "response",
-            id: message.id,
-            ok: true,
-            payload: await document.backend.getMetadata()
-          });
           return;
         }
       }
@@ -397,17 +347,6 @@ export class PatternEditorProvider
       throw error;
     }
   }
-}
-
-function parentUri(uri: vscode.Uri): vscode.Uri {
-  const separatorIndex = uri.path.lastIndexOf("/");
-
-  return uri.with({
-    path:
-      separatorIndex > 0
-        ? uri.path.slice(0, separatorIndex)
-        : "/"
-  });
 }
 
 function toPatternRequestError(

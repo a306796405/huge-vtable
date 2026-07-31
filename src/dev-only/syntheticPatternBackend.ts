@@ -9,8 +9,6 @@
 import type { PatternBackend } from "../extension/patternBackend";
 import {
   isPatternEditableColumnId,
-  type PatternDocumentStateEvent,
-  type PatternHistoryDirection,
   type PatternHistoryResponse,
   type PatternMetadata,
   type PatternMutationEffect,
@@ -42,7 +40,6 @@ export type SyntheticPatternOptions = {
   revision?: number;
   delayMs?: number;
   storeSnapshot?: SyntheticPatternStoreSnapshot;
-  isDirty?: boolean;
   /**
    * 仅供人工验收统一恢复流程；每种故障最多触发一次。
    * 正式 PatternBackend/C++ ICE 不实现这项开发能力。
@@ -59,7 +56,6 @@ type SyntheticPatternFile = {
 };
 
 type ContentState = {
-  id: number;
   store: SyntheticPatternStoreSnapshot;
 };
 
@@ -76,12 +72,6 @@ export class SyntheticPatternBackend implements PatternBackend {
   private readonly delayMs: number;
   private readonly undoStack: HistoryEntry[] = [];
   private readonly redoStack: HistoryEntry[] = [];
-  private readonly documentStateListeners = new Set<
-    (event: PatternDocumentStateEvent) => void
-  >();
-  private currentContentStateId = 0;
-  private savedContentStateId = 0;
-  private nextContentStateId = 1;
   private readonly debugFaults: Set<SyntheticDebugFault>;
 
   constructor(options: SyntheticPatternOptions = {}) {
@@ -107,20 +97,15 @@ export class SyntheticPatternBackend implements PatternBackend {
       Number.MAX_SAFE_INTEGER
     );
     this.delayMs = clampInteger(options.delayMs ?? 0, 0, 5_000);
-    this.savedContentStateId = options.isDirty ? -1 : 0;
     this.debugFaults = new Set(options.debugFaults);
   }
 
-  static fromBytes(
-    bytes: Uint8Array,
-    options: { isDirty?: boolean } = {}
-  ): SyntheticPatternBackend {
+  static fromBytes(bytes: Uint8Array): SyntheticPatternBackend {
     const text = new TextDecoder().decode(bytes).trim();
 
     if (!text) {
       return new SyntheticPatternBackend({
-        totalVectors: DEFAULT_TOTAL_VECTORS,
-        isDirty: options.isDirty
+        totalVectors: DEFAULT_TOTAL_VECTORS
       });
     }
 
@@ -141,8 +126,7 @@ export class SyntheticPatternBackend implements PatternBackend {
             ? parsed.revision
             : 0,
         storeSnapshot:
-          parsed.store as SyntheticPatternStoreSnapshot,
-        isDirty: options.isDirty
+          parsed.store as SyntheticPatternStoreSnapshot
       });
     }
 
@@ -152,7 +136,6 @@ export class SyntheticPatternBackend implements PatternBackend {
         typeof parsed.totalVectors === "number"
           ? parsed.totalVectors
           : DEFAULT_TOTAL_VECTORS,
-      isDirty: options.isDirty,
       debugFaults: readDebugFaults(parsed)
     });
   }
@@ -214,18 +197,13 @@ export class SyntheticPatternBackend implements PatternBackend {
     }
 
     const previousRevision = this.revision;
-    const before = this.captureContentState(
-      this.currentContentStateId
-    );
+    const before = this.captureContentState();
     const result = this.execute(request.operation);
     const changed = result.effects.length > 0;
 
     if (changed) {
       this.revision += 1;
-      this.currentContentStateId = this.nextContentStateId++;
-      const after = this.captureContentState(
-        this.currentContentStateId
-      );
+      const after = this.captureContentState();
       this.undoStack.push({
         before,
         after,
@@ -257,10 +235,6 @@ export class SyntheticPatternBackend implements PatternBackend {
     return new TextEncoder().encode(
       `${JSON.stringify(file, null, 2)}\n`
     );
-  }
-
-  markSaved(): void {
-    this.savedContentStateId = this.currentContentStateId;
   }
 
   undo(): PatternHistoryResponse {
@@ -307,36 +281,6 @@ export class SyntheticPatternBackend implements PatternBackend {
       entry.forwardEffects,
       "已重做上一项操作。"
     );
-  }
-
-  async runHistory(
-    direction: PatternHistoryDirection
-  ): Promise<PatternMetadata> {
-    const result =
-      direction === "undo" ? this.undo() : this.redo();
-    const event: PatternDocumentStateEvent = {
-      action: direction === "undo" ? "undone" : "redone",
-      metadata: this.createMetadata(),
-      effects: result.effects,
-      message: result.message
-    };
-
-    for (const listener of this.documentStateListeners) {
-      listener(event);
-    }
-
-    return event.metadata;
-  }
-
-  onDidChangeDocumentState(
-    listener: (event: PatternDocumentStateEvent) => void
-  ): () => void {
-    this.documentStateListeners.add(listener);
-    return () => this.documentStateListeners.delete(listener);
-  }
-
-  dispose(): void {
-    this.documentStateListeners.clear();
   }
 
   private consumeDebugFault(
@@ -393,25 +337,18 @@ export class SyntheticPatternBackend implements PatternBackend {
   private createMetadata(): PatternMetadata {
     return {
       totalVectors: this.store.totalVectors,
-      revision: this.revision,
-      isDirty:
-        this.currentContentStateId !==
-        this.savedContentStateId,
-      canUndo: this.undoStack.length > 0,
-      canRedo: this.redoStack.length > 0
+      revision: this.revision
     };
   }
 
-  private captureContentState(id: number): ContentState {
+  private captureContentState(): ContentState {
     return {
-      id,
       store: this.store.toSnapshot()
     };
   }
 
   private restoreContentState(state: ContentState): void {
     this.store = SyntheticPatternStore.fromSnapshot(state.store);
-    this.currentContentStateId = state.id;
   }
 
   private createHistoryResponse(

@@ -44,9 +44,6 @@ export type PatternRenderRow = {
 export type PatternMetadata = {
   totalVectors: number;
   revision: number;
-  isDirty: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
 };
 
 export type PatternWindowRequest = {
@@ -150,22 +147,19 @@ export interface PatternDocumentClient {
   applyMutation(
     request: PatternMutationRequest
   ): Promise<PatternMutationResponse>;
-  runHistory(
-    direction: PatternHistoryDirection
-  ): Promise<PatternMetadata>;
   onDidChangeDocumentState?(
     listener: (event: PatternDocumentStateEvent) => void
   ): () => void;
   /**
    * Webview 只上报诊断上下文，不上报行、单元格或剪贴板内容。
-   * 浏览器 Demo 可以不实现；VS Code client 会转发到 LogOutputChannel。
+   * VS Code client 会把安全上下文转发到 LogOutputChannel。
    */
   reportDiagnostic?(entry: EditorDiagnosticEntry): void;
   dispose?(): void;
 }
 
 export type PatternDocumentStateEvent = {
-  action: "saved" | "reverted" | "undone" | "redone";
+  action: "reloaded" | "undone" | "redone";
   metadata: PatternMetadata;
   effects?: PatternMutationEffect[];
   message?: string;
@@ -174,21 +168,18 @@ export type PatternDocumentStateEvent = {
 export type PatternCommand =
   | "getMetadata"
   | "getWindow"
-  | "applyMutation"
-  | "runHistory";
+  | "applyMutation";
 
 export type PatternRequestPayloadMap = {
   getMetadata: undefined;
   getWindow: PatternWindowRequest;
   applyMutation: PatternMutationRequest;
-  runHistory: PatternHistoryDirection;
 };
 
 export type PatternResponsePayloadMap = {
   getMetadata: PatternMetadata;
   getWindow: PatternWindowResponse;
   applyMutation: PatternMutationResponse;
-  runHistory: PatternMetadata;
 };
 
 export type WebviewRequestMessage = {

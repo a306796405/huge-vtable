@@ -43,8 +43,8 @@ import {
 } from "../pattern-domain/patternTableBinding";
 import type {
   PatternDocumentClient,
-  PatternHistoryDirection,
   PatternMetadata,
+  PatternMutationEffect,
   PatternMutationOperation,
   PatternRequestError,
   PatternRenderRow
@@ -113,8 +113,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
   const revisionRef = useRef(0);
   const windowStartRef = useRef(0);
   const mutationPendingRef = useRef(false);
-  const historyPendingRef = useRef(false);
-  const historyEventVersionRef = useRef(0);
   const recoveryPromiseRef = useRef<Promise<void> | null>(
     null
   );
@@ -129,9 +127,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
     useState<PatternTableAdapter | null>(null);
   const [state, setState] =
     useState<LogicalViewportState>(INITIAL_STATE);
-  const [isDirty, setIsDirty] = useState(false);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [isRecovering, setIsRecovering] =
     useState(false);
@@ -164,11 +159,8 @@ export function usePatternViewport(client: PatternDocumentClient) {
        * metadata state 只负责首次创建 viewport。后续 revision 由 runtime
        * 原地推进，不能替换这个对象，否则 React effect 会销毁并重建表格，
        * 造成闪动和滚动位置丢失。
-       */
+      */
       setMetadata(current => current ?? nextMetadata);
-      setIsDirty(nextMetadata.isDirty);
-      setCanUndo(nextMetadata.canUndo);
-      setCanRedo(nextMetadata.canRedo);
     },
     []
   );
@@ -203,7 +195,9 @@ export function usePatternViewport(client: PatternDocumentClient) {
 
       recoveryStateRef.current = "recovering";
       setIsRecovering(true);
-      setActionMessage("正在自动恢复权威数据，恢复完成前已暂停写入。");
+      setActionMessage(
+        "正在重新读取 ICE Server 的最新数据，完成前已暂停写入。"
+      );
 
       const recovery = (async () => {
         let failedAttempts = 0;
@@ -239,7 +233,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
             recoveryStateRef.current = "healthy";
             setIsRecovering(false);
             setActionMessage(
-              `已自动恢复权威数据（错误 ID：${options.errorId}）。`
+              `已恢复到 ICE Server 的最新数据（错误 ID：${options.errorId}）。`
             );
             diagnostics.recovered({
               correlationId: options.errorId,
@@ -435,18 +429,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
     return client.onDidChangeDocumentState?.(event => {
       applyMetadata(event.metadata);
 
-      if (event.action === "saved") {
-        setActionMessage("已保存到磁盘。");
-        return;
-      }
-
-      if (
-        event.action === "undone" ||
-        event.action === "redone"
-      ) {
-        historyEventVersionRef.current += 1;
-      }
-
       const viewport = viewportRef.current;
 
       if (!viewport) {
@@ -459,14 +441,18 @@ export function usePatternViewport(client: PatternDocumentClient) {
         .replaceDataset({
           totalVectors: event.metadata.totalVectors,
           revision: event.metadata.revision,
-          effects: event.effects,
-          snapshot
+          snapshot,
+          selectionPolicy:
+            event.action === "reloaded" ||
+            hasStructuralEffects(event.effects)
+              ? "clear"
+              : "preserve"
         })
         .then(() => {
           setActionMessage(
             event.message ??
-              (event.action === "reverted"
-                ? "已从磁盘恢复。"
+              (event.action === "reloaded"
+                ? "已从保存文件重新加载。"
                 : event.action === "undone"
                   ? "已撤销上一项操作。"
                   : "已重做上一项操作。")
@@ -506,7 +492,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
       if (
         !viewport ||
         mutationPendingRef.current ||
-        historyPendingRef.current ||
         recoveryStateRef.current !== "healthy"
       ) {
         if (options.optimisticPreviousRow) {
@@ -541,7 +526,7 @@ export function usePatternViewport(client: PatternDocumentClient) {
           response.revision !== response.previousRevision;
 
         /*
-         * 后端已经原子提交后，revision 必须立即推进。即使随后本地 Canvas
+         * ICE Server 已整笔提交后，revision 必须立即推进。即使随后本地 Canvas
          * 同步失败，也不能再用旧 revision 发起第二次写操作。
          */
         revisionRef.current = response.revision;
@@ -568,16 +553,19 @@ export function usePatternViewport(client: PatternDocumentClient) {
             await viewport.replaceDataset({
               totalVectors: response.totalVectors,
               revision: response.revision,
-              effects: response.effects,
-              snapshot
+              snapshot,
+              selectionPolicy: "preserve"
             });
           }
         } else if (responseCommitted) {
           await viewport.replaceDataset({
             totalVectors: response.totalVectors,
             revision: response.revision,
-            effects: response.effects,
-            snapshot
+            snapshot,
+            selectionPolicy:
+              operation.kind === "updateCells"
+                ? "preserve"
+                : "clear"
           });
         }
 
@@ -694,70 +682,6 @@ export function usePatternViewport(client: PatternDocumentClient) {
     [reportClientIssue, startAutoRecovery]
   );
 
-  const runHistory = useCallback(
-    async (direction: PatternHistoryDirection) => {
-      if (
-        mutationPendingRef.current ||
-        historyPendingRef.current ||
-        recoveryStateRef.current !== "healthy"
-      ) {
-        setActionMessage(
-          recoveryStateRef.current === "recovering"
-            ? "正在自动恢复，恢复完成后才能执行历史操作。"
-            : "上一项修改仍在处理，请稍后重试。"
-        );
-        return;
-      }
-
-      historyPendingRef.current = true;
-      setContextMenu(null);
-      setIsMutating(true);
-      const eventVersion =
-        historyEventVersionRef.current;
-
-      try {
-        const nextMetadata =
-          await client.runHistory(direction);
-        setCanUndo(nextMetadata.canUndo);
-        setCanRedo(nextMetadata.canRedo);
-        setIsDirty(nextMetadata.isDirty);
-
-        /*
-         * 有真实历史变化时，Extension 会先发送 documentState，staged
-         * replacement 的 finally 负责结束 loading。若没有历史项，则不会
-         * 有事件，这里直接恢复按钮状态。
-         */
-        if (
-          historyEventVersionRef.current === eventVersion
-        ) {
-          setActionMessage(
-            direction === "undo"
-              ? "没有可撤销的操作。"
-              : "没有可重做的操作。"
-          );
-          setIsMutating(false);
-        }
-      } catch (error) {
-        const errorId = reportClientIssue({
-          command: direction,
-          phase: "execute",
-          error
-        });
-        const viewport = viewportRef.current;
-
-        void startAutoRecovery({
-          command: direction,
-          errorId,
-          snapshot: viewport?.captureViewportSnapshot()
-        });
-        setIsMutating(false);
-      } finally {
-        historyPendingRef.current = false;
-      }
-    },
-    [client, reportClientIssue, startAutoRecovery]
-  );
-
   const handleSurfaceContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -808,16 +732,11 @@ export function usePatternViewport(client: PatternDocumentClient) {
     metadata,
     state,
     ready: metadata !== null && viewportRef.current !== null,
-    isDirty,
     isMutating: isMutating || isRecovering,
     isRecovering,
-    canUndo,
-    canRedo,
     actionMessage,
     contextMenu,
     goToVectorIndex,
-    undo: () => runHistory("undo"),
-    redo: () => runHistory("redo"),
     insertRows,
     deleteSelectedRows,
     closeContextMenu: () => setContextMenu(null),
@@ -829,6 +748,18 @@ export function usePatternViewport(client: PatternDocumentClient) {
       handleSurfaceContextMenu
     } satisfies PatternTableBindings
   };
+}
+
+function hasStructuralEffects(
+  effects: readonly PatternMutationEffect[] | undefined
+): boolean {
+  return Boolean(
+    effects?.some(
+      effect =>
+        effect.kind === "rowsInserted" ||
+        effect.kind === "rowsDeleted"
+    )
+  );
 }
 
 function handleCellEdit(

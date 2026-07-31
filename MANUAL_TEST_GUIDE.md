@@ -1,8 +1,7 @@
 # v22-lite VS Code 人工验收指南
 
 本指南由项目提供测试数据、操作场景和通过标准，最终结果由验收人填写。
-它验证的是 VS Code Custom Editor 产品入口；浏览器页面只用于快速定位布局
-问题，不能代替插件验收。
+它只验证 VS Code Custom Editor 产品入口。
 
 本轮不要求新增或运行单元测试。修改代码后只检查：
 
@@ -89,7 +88,7 @@ VS Code zoom：
 
 通过标准：
 
-- 可编辑列提交后保持新值，状态栏出现 `Modified`。
+- 可编辑列提交后保持新值，VS Code 标签页出现未保存圆点。
 - 每次编辑只对应一次历史操作。
 - Vector、Cycle 不进入编辑。
 - 编辑框中的方向键、Home、End 不触发表格滚动。
@@ -106,12 +105,13 @@ VS Code zoom：
 
 - Insert/Delete 经过一次 `applyMutation()` 和一次 revision。
 - 未删除行的 `rowKey` 稳定；显示 Vector 按新位置重算。
+- Insert/Delete 后旧选区被清除。
 - 删除到 0 行后仍可重新插入。
 - 操作过程中不先清空 Canvas。
 
 ## 4. VS Code Clipboard
 
-本节必须在 Extension Development Host 中执行，不能只在普通浏览器执行。
+本节必须在 Extension Development Host 中执行。
 
 ### 场景 4.1：Cmd/Ctrl+A 和 Copy
 
@@ -153,7 +153,7 @@ STORE	third row	0
 
 - Vector 98、99 被更新。
 - 自动新增 Vector 100。
-- 更新和新增同成同败。
+- 更新和新增同时成功或同时失败。
 - 新增行获得新 `rowKey`，未覆盖字段为空。
 
 ### 场景 4.4：非法 Paste
@@ -169,7 +169,7 @@ STORE	third row	0
 - 状态栏显示具体原因和错误 ID。
 - Output 日志不包含剪贴板文本或单元格内容。
 
-## 5. 结构变化后保持当前看到的数据
+## 5. 结构变化后保持原逻辑位置
 
 使用 `01-small-100.pat` 的新副本。
 
@@ -181,10 +181,10 @@ STORE	third row	0
 
 通过标准：
 
-- 插入后原先可见的那条数据仍停留在相同屏幕位置，其显示 Vector 由 5
-  变为 10。
-- 删除后同一条数据仍停留在相同屏幕位置，其显示 Vector 恢复为 5。
-- 纵向 scrollbar 会按结构变化补偿，但用户原来看到的那条数据不跳动。
+- 插入后首个可见逻辑位置仍为 Vector 5。
+- 原先 Vector 5 的数据变为 Vector 10，因此在屏幕中下移 5 行。
+- 删除后首个可见逻辑位置仍为 Vector 5，原数据上移回原位置。
+- Insert/Delete 后选区清除。
 - 横向 `scrollLeft` 始终保持。
 
 ### 场景 5.2：删除后数据不足一屏
@@ -209,16 +209,16 @@ STORE	third row	0
 2. 插入 2 行。
 3. 删除 1 行。
 4. 执行一次包含更新和越界新增的 Paste。
-5. 连续使用工具栏 Undo，直到 `canUndo=false`。
-6. 连续使用工具栏 Redo，直到 `canRedo=false`。
-7. 重复使用 Cmd/Ctrl+Z 和 Cmd/Ctrl+Shift+Z。
+5. 使用 VS Code 菜单或 Cmd/Ctrl+Z 逐项 Undo。
+6. 使用 VS Code 菜单或 Cmd/Ctrl+Shift+Z 逐项 Redo。
 
 通过标准：
 
-- 工具栏与快捷键共用 VS Code CustomDocumentEditEvent 历史链。
+- 菜单与快捷键共用 VS Code Custom Editor 历史链。
 - 每个业务操作只撤销一次；Paste 的更新和新增一起撤销。
 - Undo/Redo 后 revision 单调推进，不回退旧 revision 数字。
-- 行结构、单元格、总行数、dirty 和按钮状态一致。
+- 行结构、单元格、总行数和 VS Code 标签页未保存状态一致。
+- 结构型 Undo/Redo 清除选区，纯单元格 Undo/Redo 保留有效选区。
 - 视口与横向位置合理保持，不白屏。
 
 ## 7. 错误日志和无闪动恢复
@@ -247,9 +247,9 @@ STORE	third row	0
 通过标准：
 
 - 第一次后端写入没有提交。
-- controller 自动读取 metadata 和权威窗口。
+- controller 自动读取最新文档基本信息和当前页。
 - 旧 Canvas 在同步完成前保持，没有白屏或 loading 遮罩。
-- 首次乐观值最终恢复为权威值；第二次修改成功。
+- 首次乐观值最终恢复为 ICE Server 返回值；第二次修改成功。
 - 错误 ID能关联 `applyMutation` 失败和恢复结果。
 
 ### 场景 7.3：本地校验错误
@@ -262,21 +262,21 @@ STORE	third row	0
 - 当前 records、纵向和横向位置不变化。
 - 日志级别为 warning，并带错误 ID。
 
-## 8. Save、Revert、Backup 和关闭
+## 8. Save、Reload 和关闭
 
 使用 `01-small-100.pat` 的副本。
 
-### 场景 8.1：Save 和 dirty 基线
+### 场景 8.1：Save 和未保存状态
 
-1. 修改单元格，确认编辑器标签和状态栏都显示 dirty。
-2. Cmd/Ctrl+S，确认 dirty 清除。
+1. 修改单元格，确认编辑器标签出现未保存圆点。
+2. Cmd/Ctrl+S，确认圆点清除。
 3. 再修改一次，然后 Undo 回到保存内容。
-4. Redo，再次离开保存内容。
+4. Redo，再次修改保存后的内容。
 
 通过标准：
 
-- 只有宿主写盘成功后 backend 才推进保存基线。
-- 回到保存内容时 dirty 与真实后端状态一致。
+- 只有文件写入成功后 VS Code 才清除未保存圆点。
+- 回到最近一次成功写入文件的内容时，VS Code 状态与 ICE Server 一致。
 - 保存不会清空当前表格或滚动位置。
 
 ### 场景 8.2：Save As
@@ -288,34 +288,42 @@ STORE	third row	0
 
 - 目标文件包含 mutation 结果。
 - 原文件不会被意外覆盖。
-- 保存失败时 dirty 不能被错误清除。
+- 保存失败时未保存圆点不能被错误清除。
 
-### 场景 8.3：Revert
+### 场景 8.3：Reload
 
 1. 编辑、插入和 Paste，但不保存。
 2. 执行 `File: Revert File`。
 
 通过标准：
 
-- 磁盘内容重新成为真源。
-- 未保存修改被放弃，dirty 清除。
-- 新窗口准备好前旧 Canvas 保持，纵横位置尽量恢复。
+- ICE Server 丢弃未保存的内存修改并重新读取原文件。
+- VS Code 的未保存圆点清除。
+- 新页面准备好前旧 Canvas 保持，逻辑位置和横向位置合理恢复。
+- 旧选区清除，旧请求返回后不能覆盖新页面。
 
-### 场景 8.4：关闭和 Backup
+> VS Code API 名称仍是 `revertCustomDocument()`，产品语义统一称为 Reload。
+
+### 场景 8.4：关闭页面
 
 1. 干净状态关闭页面。
 2. 修改后关闭，检查 VS Code 的保存确认。
-3. 修改后执行 `Developer: Reload Window`。
-4. 等待 Custom Editor backup 恢复。
-5. 在窗口读取或 mutation 延迟期间关闭页面。
+3. 分别验证“保存”“放弃”和“取消”。
+4. 在页面读取或 mutation 延迟期间关闭页面。
 
 通过标准：
 
 - 干净页面不产生多余提示。
-- dirty 页面不会静默丢失修改。
-- backup 恢复后显示 Modified。
+- 有未保存修改时，正常关闭必须由 VS Code 提示用户选择。
+- 选择保存时只有写入成功才关闭；选择取消时页面继续保留。
 - dispose 后迟到响应不能重新更新已关闭 Webview。
 - Output 中没有未处理 Promise rejection。
+
+### 已知限制：不支持 Hot Exit Backup
+
+当前 `backupCustomDocument()` 明确返回不支持，不写入或读取 Pattern 备份。
+执行 `Developer: Reload Window`、VS Code 崩溃或系统异常退出时，未保存修改
+可能丢失。这是已确认的产品限制，不应按“能够恢复未保存内容”验收。
 
 ## 9. 验收结果模板
 
@@ -339,10 +347,10 @@ Output 摘要：
 
 ```text
 功能与快捷键：
-视口锚定：
+结构变化后的逻辑位置：
 Undo/Redo：
 错误恢复与日志：
-Save/Revert/Backup：
+Save/Reload/关闭：
 1 亿行末行：
 阻塞问题：
 验收人：

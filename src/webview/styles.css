@@ -213,9 +213,9 @@ body {
 
 /*
  * VTable 1.22.2 会用无 nonce 的 <style> 动态注入这些基础布局规则。
- * 浏览器 Demo 允许该样式，但 VS Code Custom Editor 的 CSP 会拒绝它。
- * 最明显的结果是 canvas 保持 inline 布局并向下偏移一行文本高度，导致
- * 最后一条真实 record 和底部边框被 Surface 裁掉。
+ * VS Code Custom Editor 的 CSP 会拒绝这段动态样式。最明显的结果是
+ * canvas 保持 inline 布局并向下偏移一行文本高度，导致最后一条真实
+ * record 和底部边框被 Surface 裁掉。
  *
  * 因此把当前锁定版本中实际使用的基础规则收进插件自己的静态 CSS。
  * 这不是末尾 padding，也不会增加 record；升级 VTable 时只需在这里
